@@ -4,7 +4,6 @@ use std::env;
 use tracing_subscriber::EnvFilter;
 use crate::agent::TradingAgent;
 use rig::providers::openai::Client as OpenAIClient;
-use rig::embeddings::EmbeddingModel;
 use std::io::{self, Write};
 use tokio;
 
