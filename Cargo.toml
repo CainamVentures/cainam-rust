@@ -4,46 +4,32 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-rig-core = { path = "./rig-core", features = ["derive", "all"] }
-rig-qdrant = { path = "./rig-qdrant" }
-tokio = { version = "1.0", features = ["full", "test-util"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
 anyhow = "1.0"
-thiserror = "1.0"
+tokio = { version = "1.0", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-reqwest = { version = "0.11", features = ["json", "cookies"] }
-async-trait = "0.1"
-chrono = "0.4"
-qdrant-client = "1.7"
-uuid = { version = "1.0", features = ["v4", "serde"] }
-base64 = "0.21"
-hmac = "0.12"
-sha2 = "0.10"
-tokio-tungstenite = { version = "0.20", features = ["native-tls"] }
-futures-util = "0.3"
-url = "2.4"
 dotenv = "0.15"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+reqwest = { version = "0.11", features = ["json"] }
+chrono = "0.4"
+async-trait = "0.1"
+qdrant-client = "1.7"
+rig = { package = "rig-core", version = "0.6.1" }
 
 # Temporarily remove Discord and Telegram until we resolve the dependency conflicts
 # serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "rustls_backend", "model"] }
 # teloxide = { version = "0.12", features = ["macros"] }
-
-[workspace]
-members = [
-    ".",
-    "rig-core",
-    "rig-qdrant",
-    "rig-birdeye"
-]
-resolver = "2"
 
 [dev-dependencies]
 tokio = { version = "1.0", features = ["full", "test-util", "macros"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 pretty_assertions = "1.0"
 dotenv = "0.15"
+mockall = "0.11"
+async-trait = "0.1"
+test-log = { version = "0.2", features = ["trace"] }
+env_logger = "0.10"
 
 [features]
 default = ["derive"]

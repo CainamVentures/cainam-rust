@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 use super::TimeInterval;
+use std::fmt;
+use crate::providers::pagination::PaginationParams;
 
 // Token Search Types
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -9,28 +11,86 @@ pub struct TokenSearchParams {
     pub sort_by: Option<TokenSortBy>,
     #[serde(rename = "sort_type")]
     pub sort_type: Option<SortType>,
-    pub offset: Option<u32>,
-    pub limit: Option<u32>,
+    #[serde(flatten)]
+    pub pagination: Option<PaginationParams>,
+}
+
+impl TokenSearchParams {
+    pub fn new(keyword: String) -> Self {
+        Self {
+            keyword,
+            sort_by: None,
+            sort_type: None,
+            pagination: None,
+        }
+    }
+
+    pub fn with_sort(mut self, sort_by: TokenSortBy, sort_type: SortType) -> Self {
+        self.sort_by = Some(sort_by);
+        self.sort_type = Some(sort_type);
+        self
+    }
+
+    pub fn with_pagination(mut self, pagination: PaginationParams) -> Self {
+        self.pagination = Some(pagination);
+        self
+    }
+
+    pub fn with_limit(mut self, limit: u32) -> Self {
+        let pagination = self.pagination.get_or_insert_with(PaginationParams::default);
+        pagination.limit = Some(limit);
+        self
+    }
+
+    pub fn offset(&self) -> Option<u32> {
+        self.pagination.as_ref().and_then(|p| p.offset)
+    }
+
+    pub fn limit(&self) -> Option<u32> {
+        self.pagination.as_ref().and_then(|p| p.limit)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TokenSortBy {
-    Fdv,
-    Marketcap,
-    Liquidity,
+    #[serde(rename = "price")]
     Price,
-    #[serde(rename = "price_change_24h_percent")]
-    PriceChange24h,
-    #[serde(rename = "volume_24h_usd")]
-    Volume24h,
+    #[serde(rename = "volume")]
+    Volume,
+    #[serde(rename = "liquidity")]
+    Liquidity,
+    #[serde(rename = "price_change")]
+    PriceChange,
+}
+
+impl fmt::Display for TokenSortBy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TokenSortBy::Price => write!(f, "price"),
+            TokenSortBy::Volume => write!(f, "volume"),
+            TokenSortBy::Liquidity => write!(f, "liquidity"),
+            TokenSortBy::PriceChange => write!(f, "price_change"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SortType {
-    Asc,
-    Desc,
+    #[serde(rename = "asc")]
+    Ascending,
+    #[serde(rename = "desc")]
+    Descending,
+}
+
+impl fmt::Display for SortType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SortType::Ascending => write!(f, "asc"),
+            SortType::Descending => write!(f, "desc"),
+        }
+    }
 }
 
 // Token Market Data Types
@@ -152,4 +212,38 @@ pub struct TokenExtensions {
     pub discord: Option<String>,
     pub medium: Option<String>,
     pub description: Option<String>,
-} 
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenInfo {
+    pub address: String,
+    pub symbol: String,
+    pub name: String,
+    pub decimals: u8,
+    pub price_usd: f64,
+    pub volume_24h: f64,
+    pub market_cap: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LiquidityAnalysis {
+    pub total_bid_liquidity: f64,
+    pub total_ask_liquidity: f64,
+    pub bid_ask_ratio: f64,
+    pub depth_quality: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MarketImpact {
+    pub price_impact: f64,
+    pub executed_price: f64,
+    pub size_usd: f64,
+    pub size_tokens: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PricePoint {
+    pub timestamp: i64,
+    pub price: f64,
+    pub volume: f64,
+}

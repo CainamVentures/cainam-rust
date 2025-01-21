@@ -4176,6 +4176,889 @@ I see the issue now. The repository URL for `rig-core` and `rig-qdrant` is incor
 _**Assistant**_
 
 ```
+[package]
+name = "solana-trading-agent"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rig-core = "0.6.1"
+rig-qdrant = "0.2.0"
+tokio = { version = "1.0", features = ["full", "test-util"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+thiserror = "1.0"
+tracing = "0.1"
+reqwest = { version = "0.11", features = ["json", "cookies"] }
+uuid = { version = "1.0", features = ["v4", "serde"] }
+qdrant-client = "1.7"
+
+[dev-dependencies]
+tokio = { version = "1.0", features = ["full", "test-util", "macros"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+```
+
+---
+
+_**Assistant**_
+
+
+
+
+
+
+
+Now let's run the tests again:
+
+---
+
+_**Assistant**_
+
+```
+cargo test
+```
+
+---
+
+_**Assistant**_
+
+
+
+
+
+
+
+I see the issue. Let's update the `Cargo.toml` with the correct version of `rig-qdrant`:
+
+---
+
+_**Assistant**_
+
+```
+[package]
+name = "solana-trading-agent"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rig-core = "0.6.1"
+rig-qdrant = "0.1.5"
+tokio = { version = "1.0", features = ["full", "test-util"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+thiserror = "1.0"
+tracing = "0.1"
+reqwest = { version = "0.11", features = ["json", "cookies"] }
+uuid = { version = "1.0", features = ["v4", "serde"] }
+qdrant-client = "1.7"
+
+[dev-dependencies]
+tokio = { version = "1.0", features = ["full", "test-util", "macros"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+```
+
+---
+
+_**Assistant**_
+
+
+
+
+
+
+
+Let's run the tests again:
+
+---
+
+_**Assistant**_
+
+```
+cargo test
+```
+
+---
+
+_**Assistant**_
+
+
+
+I see several issues that need to be fixed. Let me address them one by one:
+
+1. First, let's fix the `VectorStore` implementation:
+
+---
+
+_**Assistant**_
+
+```
+use anyhow::Result;
+use qdrant_client::{
+    client::Qdrant,
+    qdrant::{
+        vectors_config::Config,
+        CreateCollection, Distance, PointStruct, VectorParams, VectorsConfig,
+        Value, PointId, SearchPoints,
+    },
+};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
+
+const COLLECTION_NAME: &str = "trading_memory";
+const VECTOR_SIZE: u64 = 1536;  // OpenAI embedding size
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TradeMemory {
+    pub id: String,
+    pub action: String,
+    pub symbol: String,
+    pub amount: f64,
+    pub price: f64,
+    pub timestamp: i64,
+    pub reason: String,
+    pub outcome: Option<String>,
+}
+
+pub struct VectorStore {
+    client: Arc<Qdrant>,
+    collection: String,
+}
+
+impl VectorStore {
+    pub async fn new() -> Result<Self> {
+        let config = qdrant_client::config::QdrantConfig::from_url("http://localhost:6334");
+        let client = Qdrant::new(Some(config))?;
+
+        // Create collection if it doesn't exist
+        if !client.collection_exists(COLLECTION_NAME).await? {
+            let vectors_config = VectorsConfig {
+                config: Some(Config::Params(VectorParams {
+                    size: VECTOR_SIZE as u64,
+                    distance: Distance::Cosine.into(),
+                    ..Default::default()
+                })),
+            };
+
+            let create_collection = CreateCollection {
+                collection_name: COLLECTION_NAME.to_string(),
+                vectors_config: Some(vectors_config),
+                ..Default::default()
+            };
+
+            client.create_collection(&create_collection).await?;
+        }
+
+        Ok(Self {
+            client: Arc::new(client),
+            collection: COLLECTION_NAME.to_string(),
+        })
+    }
+
+    pub async fn store_memory(&self, memory: TradeMemory, embedding: Vec<f32>) -> Result<()> {
+        let mut payload: HashMap<String, Value> = HashMap::new();
+        let memory_value = serde_json::to_value(&memory)?;
+        
+        if let serde_json::Value::Object(map) = memory_value {
+            for (k, v) in map {
+                payload.insert(k, v.try_into()?);
+            }
+        }
+
+        let point = PointStruct {
+            id: Some(PointId::from(memory.id)),
+            vectors: Some(embedding.into()),
+            payload: Some(payload),
+            ..Default::default()
+        };
+
+        self.client
+            .upsert_points(COLLECTION_NAME, None, vec![point], None)
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn search_similar(&self, query_embedding: Vec<f32>, limit: u64) -> Result<Vec<TradeMemory>> {
+        let search_points = SearchPoints {
+            collection_name: self.collection.clone(),
+            vector: query_embedding,
+            limit,
+            with_payload: Some(true.into()),
+            ..Default::default()
+        };
+
+        let response = self.client.search_points(&search_points).await?;
+        
+        let memories = response
+            .result
+            .into_iter()
+            .filter_map(|point| {
+                point.payload.and_then(|payload| {
+                    let value = serde_json::Value::Object(
+                        payload.into_iter().map(|(k, v)| (k, v.try_into().unwrap())).collect()
+                    );
+                    serde_json::from_value(value).ok()
+                })
+            })
+            .collect();
+
+        Ok(memories)
+    }
+}
+```
+
+---
+
+_**Assistant**_
+
+
+
+
+
+
+
+2. Now let's fix the `main.rs` file:
+
+---
+
+_**Assistant**_
+
+```
+use anyhow::Result;
+use std::env;
+use tracing_subscriber::EnvFilter;
+use crate::agent::TradingAgent;
+
+mod agent;
+mod trading;
+mod twitter;
+mod vector_store;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    // Initialize logging
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .init();
+
+    // Get environment variables
+    let openai_key = env::var("OPENAI_API_KEY")?;
+    let twitter_email = env::var("TWITTER_EMAIL")?;
+    let twitter_username = env::var("TWITTER_USERNAME")?;
+    let twitter_password = env::var("TWITTER_PASSWORD")?;
+
+    // Initialize agent
+    let agent = TradingAgent::new(
+        &openai_key,
+        twitter_email,
+        twitter_username,
+        twitter_password,
+    ).await?;
+
+    // Example: Analyze SOL market
+    agent.analyze_market("SOL").await?;
+
+    Ok(())
+}
+```
+
+---
+
+_**Assistant**_
+
+
+
+
+
+
+
+
+
+
+
+3. Let's fix the `TradingEngine` implementation:
+
+---
+
+_**Assistant**_
+
+```
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TradeDecision {
+    pub action: String,
+    pub symbol: String,
+    pub amount: f64,
+    pub reason: String,
+    pub confidence: f64,
+}
+
+#[derive(Debug)]
+pub struct TradingEngine {
+    pub min_confidence: f64,
+    pub max_trade_size: f64,
+}
+
+impl TradingEngine {
+    pub fn new(min_confidence: f64, max_trade_size: f64) -> Self {
+        Self {
+            min_confidence,
+            max_trade_size,
+        }
+    }
+
+    pub async fn execute_trade(&self, decision: &TradeDecision) -> Result<bool> {
+        // Validate trade parameters
+        if decision.confidence < self.min_confidence {
+            tracing::info!("Trade rejected: Confidence too low");
+            return Ok(false);
+        }
+
+        if decision.amount > self.max_trade_size {
+            tracing::info!("Trade rejected: Size too large");
+            return Ok(false);
+        }
+
+        // TODO: Implement actual trading logic here
+        tracing::info!(
+            "Executing trade: {} {} amount: {}",
+            decision.action,
+            decision.symbol,
+            decision.amount
+        );
+
+        Ok(true)
+    }
+}
+```
+
+---
+
+_**Assistant**_
+
+
+
+
+
+
+
+
+
+
+
+4. Let's fix the `TwitterClient` implementation:
+
+---
+
+_**Assistant**_
+
+```
+use anyhow::Result;
+use reqwest::Client;
+use std::time::Duration;
+
+#[derive(Debug)]
+pub struct TwitterClient {
+    client: Client,
+    email: String,
+    username: String,
+    password: String,
+    auth_token: Option<String>,
+}
+
+impl TwitterClient {
+    pub fn new(email: String, username: String, password: String) -> Self {
+        let client = Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .expect("Failed to create HTTP client");
+
+        Self {
+            client,
+            email,
+            username,
+            password,
+            auth_token: None,
+        }
+    }
+
+    pub async fn login(&mut self) -> Result<()> {
+        // TODO: Implement Twitter login flow
+        tracing::info!("Logging in to Twitter...");
+        Ok(())
+    }
+
+    pub async fn post_tweet(&self, text: &str) -> Result<()> {
+        // TODO: Implement tweet posting
+        tracing::info!("Posting tweet: {}", text);
+        Ok(())
+    }
+
+    pub async fn delete_tweet(&self, tweet_id: &str) -> Result<()> {
+        // TODO: Implement tweet deletion
+        tracing::info!("Deleting tweet: {}", tweet_id);
+        Ok(())
+    }
+}
+```
+
+---
+
+_**Assistant**_
+
+
+
+
+
+
+
+
+
+
+
+5. Let's run the tests again:
+
+---
+
+_**Assistant**_
+
+```
+cargo test
+```
+
+---
+
+_**Assistant**_
+
+
+
+
+
+
+
+Let me fix the remaining issues:
+
+1. First, let's update the `VectorStore` implementation:
+
+---
+
+_**Assistant**_
+
+```
+use anyhow::Result;
+use qdrant_client::{
+    Qdrant,
+    qdrant::{
+        vectors_config::Config,
+        CreateCollection, Distance, PointStruct, VectorParams, VectorsConfig,
+        Value, PointId, SearchPoints,
+    },
+};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
+
+const COLLECTION_NAME: &str = "trading_memory";
+const VECTOR_SIZE: u64 = 1536;  // OpenAI embedding size
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TradeMemory {
+    pub id: String,
+    pub action: String,
+    pub symbol: String,
+    pub amount: f64,
+    pub price: f64,
+    pub timestamp: i64,
+    pub reason: String,
+    pub outcome: Option<String>,
+}
+
+pub struct VectorStore {
+    client: Arc<Qdrant>,
+    collection: String,
+}
+
+impl VectorStore {
+    pub async fn new() -> Result<Self> {
+        let config = qdrant_client::config::QdrantConfig::from_url("http://localhost:6334");
+        let client = Qdrant::new(Some(config))?;
+
+        // Create collection if it doesn't exist
+        if !client.collection_exists(COLLECTION_NAME).await? {
+            let vectors_config = VectorsConfig {
+                config: Some(Config::Params(VectorParams {
+                    size: VECTOR_SIZE as u64,
+                    distance: Distance::Cosine.into(),
+                    ..Default::default()
+                })),
+            };
+
+            let create_collection = CreateCollection {
+                collection_name: COLLECTION_NAME.to_string(),
+                vectors_config: Some(vectors_config),
+                ..Default::default()
+            };
+
+            client.create_collection(&create_collection).await?;
+        }
+
+        Ok(Self {
+            client: Arc::new(client),
+            collection: COLLECTION_NAME.to_string(),
+        })
+    }
+
+    pub async fn store_memory(&self, memory: TradeMemory, embedding: Vec<f32>) -> Result<()> {
+        let mut payload = HashMap::new();
+        let memory_value = serde_json::to_value(&memory)?;
+        
+        if let serde_json::Value::Object(map) = memory_value {
+            for (k, v) in map {
+                payload.insert(k, v.try_into()?);
+            }
+        }
+
+        let point = PointStruct {
+            id: Some(PointId::from(memory.id)),
+            vectors: Some(embedding.into()),
+            payload: Some(payload),
+            ..Default::default()
+        };
+
+        self.client
+            .upsert_points(COLLECTION_NAME, None, vec![point], None)
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn search_similar(&self, query_embedding: Vec<f32>, limit: u64) -> Result<Vec<TradeMemory>> {
+        let search_points = SearchPoints {
+            collection_name: self.collection.clone(),
+            vector: query_embedding,
+            limit,
+            with_payload: Some(true.into()),
+            ..Default::default()
+        };
+
+        let response = self.client.search_points(&search_points).await?;
+        
+        let memories = response
+            .result
+            .into_iter()
+            .filter_map(|point| {
+                point.payload.and_then(|payload| {
+                    let value = serde_json::Value::Object(
+                        payload.into_iter().map(|(k, v)| (k, v.try_into().unwrap())).collect()
+                    );
+                    serde_json::from_value(value).ok()
+                })
+            })
+            .collect();
+
+        Ok(memories)
+    }
+}
+```
+
+---
+
+_**Assistant**_
+
+
+
+
+
+
+
+
+
+
+
+2. Let's update the `main.rs` file:
+
+---
+
+_**Assistant**_
+
+```
+use anyhow::Result;
+use std::env;
+use tracing_subscriber::EnvFilter;
+use crate::agent::TradingAgent;
+use crate::trading::TradingEngine;
+use crate::twitter::TwitterClient;
+use crate::vector_store::VectorStore;
+
+mod agent;
+mod trading;
+mod twitter;
+mod vector_store;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    // Initialize logging
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .init();
+
+    // Get environment variables
+    let openai_key = env::var("OPENAI_API_KEY")?;
+    let twitter_email = env::var("TWITTER_EMAIL")?;
+    let twitter_username = env::var("TWITTER_USERNAME")?;
+    let twitter_password = env::var("TWITTER_PASSWORD")?;
+
+    // Initialize agent
+    let agent = TradingAgent::new(
+        &openai_key,
+        twitter_email,
+        twitter_username,
+        twitter_password,
+    ).await?;
+
+    // Example: Analyze SOL market
+    agent.analyze_market("SOL").await?;
+
+    Ok(())
+}
+```
+
+---
+
+_**Assistant**_
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+3. Let's run the tests again:
+
+---
+
+_**Assistant**_
+
+```
+cargo test
+```
+
+---
+
+_**Assistant**_
+
+
+
+---
+
+_**User**_
+
+Cargo test doesnt work, rerun and fix issues.
+
+---
+
+_**Assistant**_
+
+I'll help fix the issues. Let's analyze the errors and fix them one by one.
+
+1. First, let's fix the workspace and dependencies in `Cargo.toml`:
+
+---
+
+_**Assistant**_
+
+```
+[package]
+name = "solana-trading-agent"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dotenv = "0.15"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+reqwest = { version = "0.11", features = ["json"] }
+chrono = "0.4"
+async-trait = "0.1"
+qdrant-client = "1.7"
+rig = { package = "rig-core", version = "0.6.1" }
+
+[dev-dependencies]
+tokio = { version = "1.0", features = ["full", "test-util", "macros"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+pretty_assertions = "1.0"
+dotenv = "0.15"
+mockall = "0.11"
+async-trait = "0.1"
+test-log = { version = "0.2", features = ["trace"] }
+env_logger = "0.10"
+```
+
+---
+
+_**Assistant**_
+
+
+
+2. Now let's fix the `VectorStore` implementation:
+
+---
+
+_**Assistant**_
+
+```
+use anyhow::Result;
+use qdrant_client::{
+    Qdrant,
+    qdrant::{
+        vectors_config::Config,
+        Distance, VectorParams, VectorsConfig,
+        Value, PointId, SearchPoints, CreateCollection,
+        PointStruct,
+    },
+};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
+
+const COLLECTION_NAME: &str = "trading_memory";
+const VECTOR_SIZE: u64 = 1536;  // OpenAI embedding size
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TradeMemory {
+    pub id: String,
+    pub action: String,
+    pub symbol: String,
+    pub amount: f64,
+    pub price: f64,
+    pub timestamp: i64,
+    pub reason: String,
+    pub outcome: Option<String>,
+}
+
+pub struct VectorStore {
+    client: Arc<Qdrant>,
+    collection: String,
+}
+
+impl VectorStore {
+    pub async fn new() -> Result<Self> {
+        let config = qdrant_client::config::QdrantConfig::from_url("http://localhost:6334");
+        let client = Qdrant::new(config)?;
+
+        // Create collection if it doesn't exist
+        if !client.collection_exists(COLLECTION_NAME).await? {
+            let vectors_config = VectorsConfig {
+                config: Some(Config::Params(VectorParams {
+                    size: VECTOR_SIZE as u64,
+                    distance: Distance::Cosine.into(),
+                    ..Default::default()
+                })),
+            };
+
+            let create_collection = CreateCollection {
+                collection_name: COLLECTION_NAME.to_string(),
+                vectors_config: Some(vectors_config),
+                ..Default::default()
+            };
+
+            client.create_collection(create_collection).await?;
+        }
+
+        Ok(Self {
+            client: Arc::new(client),
+            collection: COLLECTION_NAME.to_string(),
+        })
+    }
+
+    pub async fn store_memory(&self, memory: TradeMemory, embedding: Vec<f32>) -> Result<()> {
+        let mut payload = HashMap::new();
+        let memory_value = serde_json::to_value(&memory)?;
+        
+        if let serde_json::Value::Object(map) = memory_value {
+            for (k, v) in map {
+                payload.insert(k, Value::from(v));
+            }
+        }
+
+        let point = PointStruct {
+            id: Some(PointId::from(memory.id)),
+            vectors: Some(embedding.into()),
+            payload: Some(payload),
+            ..Default::default()
+        };
+
+        let points = vec![point];
+        self.client
+            .upsert_points(COLLECTION_NAME, points)
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn search_similar(&self, query_embedding: Vec<f32>, limit: u64) -> Result<Vec<TradeMemory>> {
+        let search_points = SearchPoints {
+            collection_name: self.collection.clone(),
+            vector: query_embedding,
+            limit,
+            with_payload: Some(true),
+            ..Default::default()
+        };
+
+        let response = self.client.search_points(search_points).await?;
+        
+        let memories = response
+            .result
+            .into_iter()
+            .filter_map(|point| {
+                point.payload.map(|payload| {
+                    let value = serde_json::Value::Object(
+                        payload.into_iter().map(|(k, v)| (k, serde_json::Value::from(v))).collect()
+                    );
+                    serde_json::from_value(value).ok()
+                }).flatten()
+            })
+            .collect();
+
+        Ok(memories)
+    }
+}
+```
+
+---
+
+_**Assistant**_
+
+
+
+
+
+
+
+3. Let's update the `agent/mod.rs` file:
+
+---
+
+_**Assistant**_
+
+```
 undefined
 ```
 

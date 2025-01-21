@@ -3,9 +3,10 @@ use dotenv::dotenv;
 use std::env;
 use tracing_subscriber::EnvFilter;
 use crate::agent::TradingAgent;
-use rig::providers::openai::Client as OpenAIClient;
+use rig::providers::openai::{Client as OpenAIClient, EmbeddingModel};
 use std::io::{self, Write};
 use tokio;
+use crate::agent::AgentConfig;
 
 mod agent;
 mod trading;
@@ -14,32 +15,31 @@ mod vector_store;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Load environment variables
-    dotenv().ok();
-
     // Initialize logging
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .init();
+    tracing_subscriber::fmt::init();
 
-    // Get environment variables
-    let openai_key = env::var("OPENAI_API_KEY")?;
-    let twitter_email = env::var("TWITTER_EMAIL")?;
-    let twitter_username = env::var("TWITTER_USERNAME")?;
-    let twitter_password = env::var("TWITTER_PASSWORD")?;
+    // Load environment variables
+    dotenv::dotenv().ok();
+
+    let config = AgentConfig {
+        openai_api_key: std::env::var("OPENAI_API_KEY")
+            .expect("OPENAI_API_KEY must be set"),
+        birdeye_api_key: std::env::var("BIRDEYE_API_KEY")
+            .expect("BIRDEYE_API_KEY must be set"),
+        twitter_email: std::env::var("TWITTER_EMAIL")
+            .expect("TWITTER_EMAIL must be set"),
+        twitter_username: std::env::var("TWITTER_USERNAME")
+            .expect("TWITTER_USERNAME must be set"),
+        twitter_password: std::env::var("TWITTER_PASSWORD")
+            .expect("TWITTER_PASSWORD must be set"),
+    };
 
     // Initialize OpenAI client and embedding model
-    let openai_client = OpenAIClient::new(&openai_key);
+    let openai_client = OpenAIClient::new(&config.openai_api_key);
     let embedding_model = openai_client.embedding_model("text-embedding-3-small");
 
-    // Create trading agent
-    let agent = TradingAgent::new(
-        &openai_key,
-        twitter_email,
-        twitter_username,
-        twitter_password,
-        embedding_model,
-    ).await?;
+    // Initialize trading agent with OpenAI embedding model
+    let agent = agent::TradingAgent::<EmbeddingModel>::new(config, embedding_model).await?;
 
     println!("Trading Agent initialized! Available commands:");
     println!("  analyze <symbol>           - Analyze market for a symbol");

@@ -1,3 +1,3 @@
-mod birdeye;
+pub mod birdeye;
 
 pub use birdeye::BirdeyeProvider; 

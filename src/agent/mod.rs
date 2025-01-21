@@ -1,8 +1,7 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use rig::{
     agent::Agent,
-    providers::openai::{Client as OpenAIClient, CompletionModel},
-    embeddings::EmbeddingModel,
+    providers::openai::{Client as OpenAIClient, CompletionModel, GPT_4_TURBO},
 };
 use crate::{
     trading::TradingEngine,
@@ -10,42 +9,49 @@ use crate::{
     vector_store::VectorStore,
 };
 
-#[allow(dead_code)]
-pub struct TradingAgent<M: EmbeddingModel> {
+#[derive(Debug, Clone)]
+pub struct AgentConfig {
+    pub openai_api_key: String,
+    pub birdeye_api_key: String,
+    pub twitter_email: String,
+    pub twitter_username: String,
+    pub twitter_password: String,
+}
+
+pub struct TradingAgent {
     agent: Agent<CompletionModel>,
     trading_engine: TradingEngine,
     twitter_client: TwitterClient,
-    vector_store: VectorStore<M>,
+    vector_store: VectorStore,
+    config: AgentConfig,
 }
 
-#[allow(dead_code)]
-impl<M: EmbeddingModel> TradingAgent<M> {
-    pub async fn new(
-        openai_key: &str,
-        twitter_email: String,
-        twitter_username: String,
-        twitter_password: String,
-        embedding_model: M,
-    ) -> Result<Self> {
+impl TradingAgent {
+    pub async fn new(config: AgentConfig) -> Result<Self> {
         // Initialize OpenAI client
-        let openai_client = OpenAIClient::new(openai_key);
+        let openai_client = OpenAIClient::new(&config.openai_api_key);
         
-        // Create agent with GPT-4o-mini
-        let agent = openai_client
-            .agent("gpt-4o-mini")
-            .preamble(include_str!("../prompts/system.txt"))
-            .build();
+        // Create agent with GPT-4
+        let agent = Agent::builder()
+            .with_model(openai_client.completion_model(GPT_4_TURBO))
+            .with_system_message(include_str!("../prompts/system.txt"))
+            .build()?;
 
         // Initialize components
         let trading_engine = TradingEngine::new(0.7, 1000.0);
-        let twitter_client = TwitterClient::new(twitter_email, twitter_username, twitter_password);
-        let vector_store = VectorStore::new(embedding_model).await?;
+        let twitter_client = TwitterClient::new(
+            config.twitter_email.clone(),
+            config.twitter_username.clone(),
+            config.twitter_password.clone()
+        );
+        let vector_store = VectorStore::new().await?;
 
         Ok(Self {
             agent,
             trading_engine,
             twitter_client,
             vector_store,
+            config,
         })
     }
 
@@ -74,5 +80,56 @@ impl<M: EmbeddingModel> TradingAgent<M> {
         );
 
         self.twitter_client.post_tweet(&tweet).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_trading_agent_creation() -> Result<()> {
+        let config = AgentConfig {
+            openai_api_key: "test_key".to_string(),
+            birdeye_api_key: "test_key".to_string(),
+            twitter_email: "test@example.com".to_string(),
+            twitter_username: "test_user".to_string(),
+            twitter_password: "test_pass".to_string(),
+        };
+
+        let agent = TradingAgent::new(config).await?;
+        assert!(agent.config.openai_api_key == "test_key");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_market_analysis() -> Result<()> {
+        let config = AgentConfig {
+            openai_api_key: "test_key".to_string(),
+            birdeye_api_key: "test_key".to_string(),
+            twitter_email: "test@example.com".to_string(),
+            twitter_username: "test_user".to_string(),
+            twitter_password: "test_pass".to_string(),
+        };
+
+        let agent = TradingAgent::new(config).await?;
+        agent.analyze_market("SOL").await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_trade_execution() -> Result<()> {
+        let config = AgentConfig {
+            openai_api_key: "test_key".to_string(),
+            birdeye_api_key: "test_key".to_string(),
+            twitter_email: "test@example.com".to_string(),
+            twitter_username: "test_user".to_string(),
+            twitter_password: "test_pass".to_string(),
+        };
+
+        let agent = TradingAgent::new(config).await?;
+        let result = agent.execute_trade("SOL", "BUY", 100.0).await?;
+        assert!(result);
+        Ok(())
     }
 } 
