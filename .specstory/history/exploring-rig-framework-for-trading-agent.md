@@ -5059,7 +5059,598 @@ _**Assistant**_
 _**Assistant**_
 
 ```
-undefined
+use anyhow::{Result, anyhow};
+use rig::{
+    agent::Agent,
+    providers::openai::{Client as OpenAIClient, CompletionModel, GPT_4_TURBO},
+};
+use crate::{
+    trading::TradingEngine,
+    twitter::TwitterClient,
+    vector_store::VectorStore,
+};
+
+#[derive(Debug, Clone)]
+pub struct AgentConfig {
+    pub openai_api_key: String,
+    pub birdeye_api_key: String,
+    pub twitter_email: String,
+    pub twitter_username: String,
+    pub twitter_password: String,
+}
+
+pub struct TradingAgent {
+    agent: Agent<CompletionModel>,
+    trading_engine: TradingEngine,
+    twitter_client: TwitterClient,
+    vector_store: VectorStore,
+    config: AgentConfig,
+}
+
+impl TradingAgent {
+    pub async fn new(config: AgentConfig) -> Result<Self> {
+        // Initialize OpenAI client
+        let openai_client = OpenAIClient::new(&config.openai_api_key);
+        
+        // Create agent with GPT-4
+        let agent = Agent::builder()
+            .with_model(openai_client.completion_model(GPT_4_TURBO))
+            .with_system_message(include_str!("../prompts/system.txt"))
+            .build()?;
+
+        // Initialize components
+        let trading_engine = TradingEngine::new(0.7, 1000.0);
+        let twitter_client = TwitterClient::new(
+            config.twitter_email.clone(),
+            config.twitter_username.clone(),
+            config.twitter_password.clone()
+        );
+        let vector_store = VectorStore::new().await?;
+
+        Ok(Self {
+            agent,
+            trading_engine,
+            twitter_client,
+            vector_store,
+            config,
+        })
+    }
+
+    pub async fn analyze_market(&self, symbol: &str) -> Result<()> {
+        // TODO: Implement market analysis using Birdeye API
+        tracing::info!("Analyzing market for {}", symbol);
+        Ok(())
+    }
+
+    pub async fn execute_trade(&self, symbol: &str, action: &str, amount: f64) -> Result<bool> {
+        let decision = crate::trading::TradeDecision {
+            action: action.to_string(),
+            symbol: symbol.to_string(),
+            amount,
+            reason: "Market analysis indicates favorable conditions".to_string(),
+            confidence: 0.8,
+        };
+
+        self.trading_engine.execute_trade(&decision).await
+    }
+
+    pub async fn post_trade_update(&self, symbol: &str, action: &str, amount: f64) -> Result<()> {
+        let tweet = format!(
+            "🤖 Trade Alert!\n{} {} {}\nReason: Market analysis indicates favorable conditions",
+            action, amount, symbol
+        );
+
+        self.twitter_client.post_tweet(&tweet).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_trading_agent_creation() -> Result<()> {
+        let config = AgentConfig {
+            openai_api_key: "test_key".to_string(),
+            birdeye_api_key: "test_key".to_string(),
+            twitter_email: "test@example.com".to_string(),
+            twitter_username: "test_user".to_string(),
+            twitter_password: "test_pass".to_string(),
+        };
+
+        let agent = TradingAgent::new(config).await?;
+        assert!(agent.config.openai_api_key == "test_key");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_market_analysis() -> Result<()> {
+        let config = AgentConfig {
+            openai_api_key: "test_key".to_string(),
+            birdeye_api_key: "test_key".to_string(),
+            twitter_email: "test@example.com".to_string(),
+            twitter_username: "test_user".to_string(),
+            twitter_password: "test_pass".to_string(),
+        };
+
+        let agent = TradingAgent::new(config).await?;
+        agent.analyze_market("SOL").await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_trade_execution() -> Result<()> {
+        let config = AgentConfig {
+            openai_api_key: "test_key".to_string(),
+            birdeye_api_key: "test_key".to_string(),
+            twitter_email: "test@example.com".to_string(),
+            twitter_username: "test_user".to_string(),
+            twitter_password: "test_pass".to_string(),
+        };
+
+        let agent = TradingAgent::new(config).await?;
+        let result = agent.execute_trade("SOL", "BUY", 100.0).await?;
+        assert!(result);
+        Ok(())
+    }
+}
+```
+
+---
+
+_**Assistant**_
+
+
+
+Now let's update the `trading/mod.rs` file:
+
+---
+
+_**Assistant**_
+
+```
+use anyhow::Result;
+
+#[derive(Debug, Clone)]
+pub struct TradeDecision {
+    pub action: String,
+    pub symbol: String,
+    pub amount: f64,
+    pub reason: String,
+    pub confidence: f64,
+}
+
+pub struct TradingEngine {
+    min_confidence: f64,
+    max_trade_size: f64,
+}
+
+impl TradingEngine {
+    pub fn new(min_confidence: f64, max_trade_size: f64) -> Self {
+        Self {
+            min_confidence,
+            max_trade_size,
+        }
+    }
+
+    pub async fn execute_trade(&self, decision: &TradeDecision) -> Result<bool> {
+        // Validate trade parameters
+        if decision.confidence < self.min_confidence {
+            tracing::warn!(
+                "Trade rejected: confidence {:.2} below minimum {:.2}",
+                decision.confidence,
+                self.min_confidence
+            );
+            return Ok(false);
+        }
+
+        if decision.amount > self.max_trade_size {
+            tracing::warn!(
+                "Trade rejected: size {} above maximum {}",
+                decision.amount,
+                self.max_trade_size
+            );
+            return Ok(false);
+        }
+
+        // Log trade execution attempt
+        tracing::info!(
+            "Executing trade: {} {} {} (confidence: {:.2})",
+            decision.action,
+            decision.amount,
+            decision.symbol,
+            decision.confidence
+        );
+
+        // TODO: Implement actual trade execution logic
+        Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_trade_execution() -> Result<()> {
+        let engine = TradingEngine::new(0.7, 1000.0);
+
+        // Test valid trade
+        let valid_trade = TradeDecision {
+            action: "BUY".to_string(),
+            symbol: "SOL".to_string(),
+            amount: 100.0,
+            reason: "Test trade".to_string(),
+            confidence: 0.8,
+        };
+        assert!(engine.execute_trade(&valid_trade).await?);
+
+        // Test low confidence trade
+        let low_confidence_trade = TradeDecision {
+            action: "SELL".to_string(),
+            symbol: "SOL".to_string(),
+            amount: 100.0,
+            reason: "Test trade".to_string(),
+            confidence: 0.5,
+        };
+        assert!(!engine.execute_trade(&low_confidence_trade).await?);
+
+        // Test large trade
+        let large_trade = TradeDecision {
+            action: "BUY".to_string(),
+            symbol: "SOL".to_string(),
+            amount: 2000.0,
+            reason: "Test trade".to_string(),
+            confidence: 0.8,
+        };
+        assert!(!engine.execute_trade(&large_trade).await?);
+
+        Ok(())
+    }
+}
+```
+
+---
+
+_**Assistant**_
+
+
+
+Now let's update the `twitter/mod.rs` file:
+
+---
+
+_**Assistant**_
+
+```
+use anyhow::Result;
+use reqwest::Client;
+
+pub struct TwitterClient {
+    client: Client,
+    email: String,
+    username: String,
+    password: String,
+    auth_token: Option<String>,
+}
+
+impl TwitterClient {
+    pub fn new(email: String, username: String, password: String) -> Self {
+        Self {
+            client: Client::new(),
+            email,
+            username,
+            password,
+            auth_token: None,
+        }
+    }
+
+    pub async fn login(&mut self) -> Result<()> {
+        // TODO: Implement Twitter login flow
+        tracing::info!("Logging in to Twitter as {}", self.username);
+        Ok(())
+    }
+
+    pub async fn post_tweet(&self, text: &str) -> Result<()> {
+        // TODO: Implement tweet posting
+        tracing::info!("Posting tweet: {}", text);
+        Ok(())
+    }
+
+    pub async fn delete_tweet(&self, tweet_id: &str) -> Result<()> {
+        // TODO: Implement tweet deletion
+        tracing::info!("Deleting tweet: {}", tweet_id);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_twitter_client() -> Result<()> {
+        let mut client = TwitterClient::new(
+            "test@example.com".to_string(),
+            "test_user".to_string(),
+            "test_pass".to_string(),
+        );
+
+        // Test login
+        client.login().await?;
+
+        // Test posting tweet
+        client.post_tweet("Test tweet").await?;
+
+        // Test deleting tweet
+        client.delete_tweet("123456789").await?;
+
+        Ok(())
+    }
+}
+```
+
+---
+
+_**Assistant**_
+
+
+
+
+
+
+
+Now let's update the `vector_store/mod.rs` file:
+
+---
+
+_**Assistant**_
+
+```
+use anyhow::Result;
+use qdrant_client::{
+    prelude::*,
+    qdrant::{
+        vectors_config::Config,
+        VectorParams,
+        VectorsConfig,
+        CreateCollection,
+        PointStruct,
+        Value,
+        PointId,
+    },
+};
+use serde::{Serialize, Deserialize};
+use std::collections::HashMap;
+
+const COLLECTION_NAME: &str = "trading_memory";
+const VECTOR_SIZE: u64 = 1536; // OpenAI embedding size
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TradeMemory {
+    pub id: String,
+    pub action: String,
+    pub symbol: String,
+    pub amount: f64,
+    pub price: f64,
+    pub reason: String,
+    pub outcome: String,
+    pub timestamp: i64,
+}
+
+pub struct VectorStore {
+    client: QdrantClient,
+}
+
+impl VectorStore {
+    pub async fn new() -> Result<Self> {
+        let client = QdrantClient::new(Some(QdrantClientConfig::from_url("http://localhost:6334")))?;
+
+        // Create collection if it doesn't exist
+        let collection_info = client.get_collection(COLLECTION_NAME).await;
+        if collection_info.is_err() {
+            let vectors_config = VectorsConfig {
+                config: Some(Config::Params(VectorParams {
+                    size: VECTOR_SIZE,
+                    distance: Distance::Cosine.into(),
+                    ..Default::default()
+                })),
+            };
+
+            client
+                .create_collection(&CreateCollection {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vectors_config: Some(vectors_config),
+                    ..Default::default()
+                })
+                .await?;
+        }
+
+        Ok(Self { client })
+    }
+
+    pub async fn store_memory(&self, memory: TradeMemory, embedding: Vec<f32>) -> Result<()> {
+        let mut payload: HashMap<String, Value> = HashMap::new();
+        payload.insert("action".to_string(), memory.action.into());
+        payload.insert("symbol".to_string(), memory.symbol.into());
+        payload.insert("amount".to_string(), memory.amount.into());
+        payload.insert("price".to_string(), memory.price.into());
+        payload.insert("reason".to_string(), memory.reason.into());
+        payload.insert("outcome".to_string(), memory.outcome.into());
+        payload.insert("timestamp".to_string(), memory.timestamp.into());
+
+        let point = PointStruct {
+            id: Some(PointId::from(memory.id)),
+            vectors: Some(embedding.into()),
+            payload: payload,
+        };
+
+        self.client
+            .upsert_points(COLLECTION_NAME, None, vec![point], None)
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn search_similar(&self, query_embedding: Vec<f32>, limit: u64) -> Result<Vec<TradeMemory>> {
+        let search_result = self.client
+            .search_points(&SearchPoints {
+                collection_name: COLLECTION_NAME.to_string(),
+                vector: query_embedding,
+                limit: limit,
+                with_payload: Some(true.into()),
+                ..Default::default()
+            })
+            .await?;
+
+        let memories = search_result
+            .result
+            .into_iter()
+            .filter_map(|point| {
+                let payload = point.payload;
+                
+                Some(TradeMemory {
+                    id: point.id.to_string(),
+                    action: payload.get("action")?.try_into().ok()?,
+                    symbol: payload.get("symbol")?.try_into().ok()?,
+                    amount: payload.get("amount")?.try_into().ok()?,
+                    price: payload.get("price")?.try_into().ok()?,
+                    reason: payload.get("reason")?.try_into().ok()?,
+                    outcome: payload.get("outcome")?.try_into().ok()?,
+                    timestamp: payload.get("timestamp")?.try_into().ok()?,
+                })
+            })
+            .collect();
+
+        Ok(memories)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+
+    #[tokio::test]
+    async fn test_vector_store() -> Result<()> {
+        let store = VectorStore::new().await?;
+
+        // Test storing memory
+        let memory = TradeMemory {
+            id: "test1".to_string(),
+            action: "BUY".to_string(),
+            symbol: "SOL".to_string(),
+            amount: 100.0,
+            price: 50.0,
+            reason: "Test trade".to_string(),
+            outcome: "SUCCESS".to_string(),
+            timestamp: Utc::now().timestamp(),
+        };
+
+        // Create mock embedding
+        let embedding = vec![0.1; VECTOR_SIZE as usize];
+        store.store_memory(memory, embedding.clone()).await?;
+
+        // Test searching similar memories
+        let results = store.search_similar(embedding, 1).await?;
+        assert!(!results.is_empty());
+        
+        let result = &results[0];
+        assert_eq!(result.symbol, "SOL");
+        assert_eq!(result.action, "BUY");
+
+        Ok(())
+    }
+}
+```
+
+---
+
+_**Assistant**_
+
+
+
+Now let's run the tests again to see if we've resolved the issues:
+
+---
+
+_**Assistant**_
+
+```
+cargo test
+```
+
+---
+
+_**Assistant**_
+
+
+
+---
+
+_**User**_
+
+FIx this issue as rust-analyzer wont work
+
+---
+
+_**Assistant**_
+
+I see the issue. The error is coming from the `Cargo.toml` file where we're trying to use features from `rig-core` but the dependency is incorrectly specified. Let me fix that.
+
+---
+
+_**Assistant**_
+
+```
+[package]
+name = "solana-trading-agent"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dotenv = "0.15"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+reqwest = { version = "0.11", features = ["json"] }
+chrono = "0.4"
+async-trait = "0.1"
+qdrant-client = "1.7"
+rig-core = { version = "0.6.1", features = ["derive"] }
+
+# Temporarily remove Discord and Telegram until we resolve the dependency conflicts
+# serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "rustls_backend", "model"] }
+# teloxide = { version = "0.12", features = ["macros"] }
+
+[dev-dependencies]
+tokio = { version = "1.0", features = ["full", "test-util", "macros"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+pretty_assertions = "1.0"
+dotenv = "0.15"
+mockall = "0.11"
+async-trait = "0.1"
+test-log = { version = "0.2", features = ["trace"] }
+env_logger = "0.10"
+```
+
+---
+
+_**Assistant**_
+
+
+
+Now let's run `cargo clean` and then try to build the project:
+
+---
+
+_**Assistant**_
+
+```
+cargo clean && cargo build
 ```
 
 ---

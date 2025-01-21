@@ -1,17 +1,12 @@
 use anyhow::Result;
 use qdrant_client::{
-    prelude::*,
+    client::QdrantClient,
     qdrant::{
-        vectors_config::Config,
-        VectorParams,
-        VectorsConfig,
-        CreateCollection,
-        PointStruct,
-        Value,
-        PointId,
+        CreateCollection, Distance, PointStruct, SearchPoints, VectorParams, VectorsConfig,
+        vectors_config::Config, Value as QdrantValue,
     },
 };
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 const COLLECTION_NAME: &str = "trading_memory";
@@ -35,11 +30,10 @@ pub struct VectorStore {
 
 impl VectorStore {
     pub async fn new() -> Result<Self> {
-        let client = QdrantClient::new(Some(QdrantClientConfig::from_url("http://localhost:6334")))?;
+        let client = QdrantClient::from_url("http://localhost:6334").build()?;
 
         // Create collection if it doesn't exist
-        let collection_info = client.get_collection(COLLECTION_NAME).await;
-        if collection_info.is_err() {
+        if !client.collection_exists(COLLECTION_NAME).await? {
             let vectors_config = VectorsConfig {
                 config: Some(Config::Params(VectorParams {
                     size: VECTOR_SIZE,
@@ -61,19 +55,30 @@ impl VectorStore {
     }
 
     pub async fn store_memory(&self, memory: TradeMemory, embedding: Vec<f32>) -> Result<()> {
-        let mut payload: HashMap<String, Value> = HashMap::new();
-        payload.insert("action".to_string(), memory.action.into());
-        payload.insert("symbol".to_string(), memory.symbol.into());
-        payload.insert("amount".to_string(), memory.amount.into());
-        payload.insert("price".to_string(), memory.price.into());
-        payload.insert("reason".to_string(), memory.reason.into());
-        payload.insert("outcome".to_string(), memory.outcome.into());
-        payload.insert("timestamp".to_string(), memory.timestamp.into());
+        let json_value = serde_json::to_value(&memory)?;
+        let json_map = json_value.as_object().unwrap();
+        let mut payload = HashMap::new();
+
+        for (k, v) in json_map {
+            match v {
+                serde_json::Value::String(s) => payload.insert(k.clone(), QdrantValue::from(s.as_str())),
+                serde_json::Value::Number(n) => {
+                    if let Some(i) = n.as_i64() {
+                        payload.insert(k.clone(), QdrantValue::from(i))
+                    } else if let Some(f) = n.as_f64() {
+                        payload.insert(k.clone(), QdrantValue::from(f))
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+        }
 
         let point = PointStruct {
-            id: Some(PointId::from(memory.id)),
+            id: Some(memory.id.into()),
             vectors: Some(embedding.into()),
-            payload: payload,
+            payload,
         };
 
         self.client
@@ -88,7 +93,7 @@ impl VectorStore {
             .search_points(&SearchPoints {
                 collection_name: COLLECTION_NAME.to_string(),
                 vector: query_embedding,
-                limit: limit,
+                limit,
                 with_payload: Some(true.into()),
                 ..Default::default()
             })
@@ -98,18 +103,28 @@ impl VectorStore {
             .result
             .into_iter()
             .filter_map(|point| {
-                let payload = point.payload;
+                let mut json_map = serde_json::Map::new();
                 
-                Some(TradeMemory {
-                    id: point.id.to_string(),
-                    action: payload.get("action")?.try_into().ok()?,
-                    symbol: payload.get("symbol")?.try_into().ok()?,
-                    amount: payload.get("amount")?.try_into().ok()?,
-                    price: payload.get("price")?.try_into().ok()?,
-                    reason: payload.get("reason")?.try_into().ok()?,
-                    outcome: payload.get("outcome")?.try_into().ok()?,
-                    timestamp: payload.get("timestamp")?.try_into().ok()?,
-                })
+                for (k, v) in point.payload {
+                    let json_value = match v {
+                        v if v.to_string().starts_with('"') => {
+                            let s = v.to_string().trim_matches('"').to_string();
+                            serde_json::Value::String(s)
+                        }
+                        v => {
+                            if let Ok(i) = v.to_string().parse::<i64>() {
+                                serde_json::Value::Number(i.into())
+                            } else if let Ok(f) = v.to_string().parse::<f64>() {
+                                serde_json::Value::Number(serde_json::Number::from_f64(f).unwrap())
+                            } else {
+                                continue;
+                            }
+                        }
+                    };
+                    json_map.insert(k, json_value);
+                }
+
+                serde_json::from_value(serde_json::Value::Object(json_map)).ok()
             })
             .collect();
 
