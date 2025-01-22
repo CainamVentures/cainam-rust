@@ -5,12 +5,11 @@ use crate::types::{
     api::{TokenSearchParams, WalletPortfolio},
     error::BirdeyeError,
 };
-mod rate_limiter;
-mod pagination;
-mod cache;
-use rate_limiter::RateLimiter;
-use pagination::{PaginationParams, PaginatedResponse, PaginatedIterator};
-use cache::CachedClient;
+use super::{
+    rate_limiter::RateLimiter,
+    pagination::{PaginationParams, PaginatedResponse, PaginatedIterator},
+    cache::CachedClient,
+};
 
 // Default cache TTL of 1 minute for frequently accessed data
 const DEFAULT_CACHE_TTL: Duration = Duration::from_secs(60);

@@ -29,6 +29,12 @@ pub enum BirdeyeError {
     #[error("Invalid parameters: {0}")]
     InvalidParameters(String),
 
+    #[error("WebSocket error: {0}")]
+    WebSocketError(String),
+
+    #[error("WebSocket connection closed")]
+    WebSocketClosed,
+
     #[error("Unexpected error: {0}")]
     UnexpectedError(String),
 }
