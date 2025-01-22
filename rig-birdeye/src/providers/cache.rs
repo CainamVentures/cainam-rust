@@ -4,26 +4,51 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::RwLock;
+use crate::types::{
+    api::TokenOverview,
+    error::BirdeyeError,
+};
 
-#[derive(Clone)]
-pub struct CachedClient<T> {
-    inner: T,
-    cache: Arc<RwLock<HashMap<String, CacheEntry>>>,
+pub struct TokenCache {
+    cache: HashMap<String, (TokenOverview, Instant)>,
     ttl: Duration,
 }
 
-struct CacheEntry {
-    value: String,
-    expires_at: Instant,
+impl TokenCache {
+    pub fn new(ttl: Duration) -> Self {
+        Self {
+            cache: HashMap::new(),
+            ttl,
+        }
+    }
+
+    pub fn get(&self, key: &str) -> Option<&TokenOverview> {
+        self.cache.get(key).and_then(|(value, timestamp)| {
+            if timestamp.elapsed() < self.ttl {
+                Some(value)
+            } else {
+                None
+            }
+        })
+    }
+
+    pub fn insert(&mut self, key: String, value: TokenOverview) {
+        self.cache.insert(key, (value, Instant::now()));
+    }
+
+    pub fn clear_expired(&mut self) {
+        self.cache.retain(|_, (_, timestamp)| timestamp.elapsed() < self.ttl);
+    }
+}
+
+pub struct CachedClient<T> {
+    inner: T,
+    ttl: Duration,
 }
 
 impl<T> CachedClient<T> {
     pub fn new(inner: T, ttl: Duration) -> Self {
-        Self {
-            inner,
-            cache: Arc::new(RwLock::new(HashMap::new())),
-            ttl,
-        }
+        Self { inner, ttl }
     }
 
     pub async fn get_token_overview<F, Fut>(

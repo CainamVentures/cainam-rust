@@ -1,42 +1,24 @@
 use thiserror::Error;
 
-#[derive(Debug, Error)]
+#[derive(Error, Debug)]
 pub enum BirdeyeError {
-    #[error("Invalid API key")]
-    InvalidApiKey,
-
-    #[error("Rate limit exceeded")]
-    RateLimitExceeded,
-
-    #[error("Token not found: {0}")]
-    TokenNotFound(String),
-
-    #[error("Invalid wallet address: {0}")]
-    InvalidWalletAddress(String),
-
-    #[error("Network error: {0}")]
-    NetworkError(#[from] reqwest::Error),
-
-    #[error("API error: {status} - {message}")]
-    ApiError {
-        status: u16,
-        message: String,
-    },
+    #[error("HTTP request failed: {0}")]
+    RequestError(#[from] reqwest::Error),
 
     #[error("Serialization error: {0}")]
     SerializationError(#[from] serde_json::Error),
 
-    #[error("Invalid parameters: {0}")]
-    InvalidParameters(String),
-
     #[error("WebSocket error: {0}")]
     WebSocketError(String),
 
-    #[error("WebSocket connection closed")]
-    WebSocketClosed,
+    #[error("Rate limit exceeded")]
+    RateLimitExceeded,
 
-    #[error("Unexpected error: {0}")]
-    UnexpectedError(String),
+    #[error("Invalid response: {0}")]
+    InvalidResponse(String),
+
+    #[error("Cache error: {0}")]
+    CacheError(String),
 }
 
 impl From<BirdeyeError> for rig_core::plugin::ActionError {

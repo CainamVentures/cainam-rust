@@ -1,9 +1,17 @@
-use serde::{Deserialize, Serialize};
+use std::future::Future;
+use std::pin::Pin;
+use crate::types::error::BirdeyeError;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct PaginationParams {
     pub offset: Option<u32>,
     pub limit: Option<u32>,
+}
+
+impl PaginationParams {
+    pub fn new(offset: Option<u32>, limit: Option<u32>) -> Self {
+        Self { offset, limit }
+    }
 }
 
 impl Default for PaginationParams {
@@ -15,74 +23,60 @@ impl Default for PaginationParams {
     }
 }
 
-impl PaginationParams {
-    pub fn new(offset: Option<u32>, limit: Option<u32>) -> Self {
-        Self { offset, limit }
-    }
+pub trait PaginatedRequest<T>: Send + Sync {
+    type Future: Future<Output = Result<Vec<T>, BirdeyeError>> + Send;
+    fn request(&self, offset: u32, limit: u32) -> Self::Future;
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PaginatedResponse<T> {
-    pub data: Vec<T>,
-    pub pagination: PaginationParams,
-}
-
-pub struct PaginatedIterator<T, F, Fut>
+pub struct PaginatedIterator<T, R>
 where
-    F: Fn(PaginationParams) -> Fut,
-    Fut: std::future::Future<Output = Result<PaginatedResponse<T>, crate::types::error::BirdeyeError>>,
+    R: PaginatedRequest<T>,
 {
-    fetch: F,
-    current_page: Option<PaginationParams>,
+    request: R,
+    current_offset: u32,
     page_size: u32,
+    has_more: bool,
 }
 
-impl<T, F, Fut> PaginatedIterator<T, F, Fut>
+impl<T, R> PaginatedIterator<T, R>
 where
-    F: Fn(PaginationParams) -> Fut,
-    Fut: std::future::Future<Output = Result<PaginatedResponse<T>, crate::types::error::BirdeyeError>>,
+    R: PaginatedRequest<T>,
 {
-    pub fn new(fetch: F) -> Self {
+    pub fn new(request: R, page_size: u32) -> Self {
         Self {
-            fetch,
-            current_page: Some(PaginationParams::default()),
-            page_size: 10,
+            request,
+            current_offset: 0,
+            page_size,
+            has_more: true,
         }
     }
 
-    pub async fn next_page(&mut self) -> Option<Result<Vec<T>, crate::types::error::BirdeyeError>> {
-        if let Some(params) = self.current_page.take() {
-            match (self.fetch)(params.clone()).await {
-                Ok(response) => {
-                    if response.data.is_empty() {
-                        return None;
-                    }
+    pub async fn next_page(&mut self) -> Option<Result<Vec<T>, BirdeyeError>> {
+        if !self.has_more {
+            return None;
+        }
 
-                    self.current_page = Some(PaginationParams {
-                        offset: Some(params.offset.unwrap_or(0) + self.page_size),
-                        limit: Some(self.page_size),
-                    });
-
-                    Some(Ok(response.data))
-                }
-                Err(e) => Some(Err(e)),
+        let result = self.request.request(self.current_offset, self.page_size).await;
+        match result {
+            Ok(items) => {
+                self.has_more = items.len() as u32 == self.page_size;
+                self.current_offset += items.len() as u32;
+                Some(Ok(items))
             }
-        } else {
-            None
+            Err(e) => {
+                self.has_more = false;
+                Some(Err(e))
+            }
         }
     }
 
-    pub async fn collect_all(mut self) -> Result<Vec<T>, crate::types::error::BirdeyeError>
-    where
-        T: Clone,
-    {
+    pub async fn collect_all(mut self) -> Result<Vec<T>, BirdeyeError> {
         let mut all_items = Vec::new();
+
         while let Some(result) = self.next_page().await {
-            match result {
-                Ok(items) => all_items.extend(items),
-                Err(e) => return Err(e),
-            }
+            all_items.extend(result?);
         }
+
         Ok(all_items)
     }
 }

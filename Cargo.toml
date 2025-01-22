@@ -14,8 +14,9 @@ serde_json = "1.0"
 reqwest = { version = "0.11", features = ["json"] }
 chrono = "0.4"
 async-trait = "0.1"
-qdrant-client = "1.7"
+qdrant-client = { version = "1.8", features = ["default"] }
 rig-core = { version = "0.6.1", features = ["derive"] }
+uuid = { version = "1.7", features = ["v4"] }
 
 # Temporarily remove Discord and Telegram until we resolve the dependency conflicts
 # serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "rustls_backend", "model"] }

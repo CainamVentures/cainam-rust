@@ -4,24 +4,19 @@ use std::fmt;
 use crate::providers::pagination::PaginationParams;
 
 // Token Search Types
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TokenSearchParams {
-    pub keyword: String,
-    #[serde(rename = "sort_by")]
-    pub sort_by: Option<TokenSortBy>,
-    #[serde(rename = "sort_type")]
-    pub sort_type: Option<SortType>,
-    #[serde(flatten)]
-    pub pagination: Option<PaginationParams>,
+    pub query: String,
+    pub limit: Option<u32>,
+    pub offset: Option<u32>,
 }
 
 impl TokenSearchParams {
     pub fn new(keyword: String) -> Self {
         Self {
-            keyword,
-            sort_by: None,
-            sort_type: None,
-            pagination: None,
+            query: keyword,
+            limit: None,
+            offset: None,
         }
     }
 
@@ -37,17 +32,16 @@ impl TokenSearchParams {
     }
 
     pub fn with_limit(mut self, limit: u32) -> Self {
-        let pagination = self.pagination.get_or_insert_with(PaginationParams::default);
-        pagination.limit = Some(limit);
+        self.limit = Some(limit);
         self
     }
 
     pub fn offset(&self) -> Option<u32> {
-        self.pagination.as_ref().and_then(|p| p.offset)
+        self.offset
     }
 
     pub fn limit(&self) -> Option<u32> {
-        self.pagination.as_ref().and_then(|p| p.limit)
+        self.limit
     }
 }
 
@@ -110,29 +104,18 @@ pub struct TokenMarketData {
 }
 
 // Wallet Portfolio Types
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WalletPortfolioParams {
-    pub wallet: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct WalletPortfolio {
-    pub wallet: String,
-    pub total_usd: f64,
-    pub items: Vec<WalletToken>,
+    pub wallet_address: String,
+    pub total_value_usd: f64,
+    pub tokens: Vec<TokenBalance>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WalletToken {
-    pub address: String,
-    pub name: String,
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TokenBalance {
+    pub token_address: String,
     pub symbol: String,
-    pub decimals: u8,
-    pub balance: String,
-    pub ui_amount: f64,
-    pub chain_id: String,
-    pub logo_uri: Option<String>,
-    pub price_usd: f64,
+    pub amount: f64,
     pub value_usd: f64,
 }
 
@@ -188,30 +171,18 @@ pub struct SecurityChecks {
 }
 
 // Token Overview Types
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TokenOverview {
     pub address: String,
-    pub decimals: u8,
     pub symbol: String,
     pub name: String,
-    pub extensions: Option<TokenExtensions>,
-    pub logo_uri: Option<String>,
-    pub liquidity: f64,
+    pub decimals: u8,
     pub price: f64,
     pub volume_24h: f64,
-    pub price_change_24h: f64,
-    pub holders: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TokenExtensions {
-    pub coingecko_id: Option<String>,
-    pub website: Option<String>,
-    pub telegram: Option<String>,
-    pub twitter: Option<String>,
-    pub discord: Option<String>,
-    pub medium: Option<String>,
-    pub description: Option<String>,
+    pub market_cap: f64,
+    pub fully_diluted_market_cap: Option<f64>,
+    pub total_supply: f64,
+    pub circulating_supply: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -220,9 +191,8 @@ pub struct TokenInfo {
     pub symbol: String,
     pub name: String,
     pub decimals: u8,
-    pub price_usd: f64,
-    pub volume_24h: f64,
-    pub market_cap: f64,
+    pub price: Option<f64>,
+    pub volume_24h: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -246,4 +216,12 @@ pub struct PricePoint {
     pub timestamp: i64,
     pub price: f64,
     pub volume: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PaginatedResponse<T> {
+    pub data: Vec<T>,
+    pub total: u32,
+    pub offset: u32,
+    pub limit: u32,
 }

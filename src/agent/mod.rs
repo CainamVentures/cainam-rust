@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use rig::{
     agent::Agent,
     providers::openai::{Client as OpenAIClient, CompletionModel, GPT_4_TURBO},
@@ -32,10 +32,10 @@ impl TradingAgent {
         let openai_client = OpenAIClient::new(&config.openai_api_key);
         
         // Create agent with GPT-4
-        let agent = Agent::builder()
-            .with_model(openai_client.completion_model(GPT_4_TURBO))
-            .with_system_message(include_str!("../prompts/system.txt"))
-            .build()?;
+        let agent = openai_client
+            .agent(GPT_4_TURBO)
+            .preamble(include_str!("../prompts/system.txt"))
+            .build();
 
         // Initialize components
         let trading_engine = TradingEngine::new(0.7, 1000.0);

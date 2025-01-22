@@ -2,9 +2,15 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use rig_core::plugin::{Plugin, PluginRegistrar};
 
+pub mod actions;
 pub mod providers;
 pub mod types;
-pub mod actions;
+
+pub use providers::birdeye::BirdeyeProvider;
+pub use types::{
+    api::{TokenInfo, TokenSearchParams, WalletPortfolio, TokenSortBy, SortType},
+    error::BirdeyeError,
+};
 
 pub use types::*;
 pub use actions::*;
@@ -124,8 +130,8 @@ impl Plugin for BirdeyePlugin {
     }
 
     fn register(&self, registrar: &mut dyn PluginRegistrar) {
-        registrar.register_action::<TokenSearchAction>();
-        registrar.register_action::<WalletSearchAction>();
+        registrar.register_action::<actions::TokenSearchAction>();
+        registrar.register_action::<actions::WalletSearchAction>();
     }
 }
 

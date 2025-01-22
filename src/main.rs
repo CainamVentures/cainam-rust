@@ -1,12 +1,8 @@
 use anyhow::Result;
-use dotenv::dotenv;
-use std::env;
-use tracing_subscriber::EnvFilter;
-use crate::agent::TradingAgent;
-use rig::providers::openai::{Client as OpenAIClient, EmbeddingModel};
+use dotenv;
 use std::io::{self, Write};
 use tokio;
-use crate::agent::AgentConfig;
+use crate::agent::{AgentConfig, TradingAgent};
 
 mod agent;
 mod trading;
@@ -34,12 +30,8 @@ async fn main() -> Result<()> {
             .expect("TWITTER_PASSWORD must be set"),
     };
 
-    // Initialize OpenAI client and embedding model
-    let openai_client = OpenAIClient::new(&config.openai_api_key);
-    let embedding_model = openai_client.embedding_model("text-embedding-3-small");
-
-    // Initialize trading agent with OpenAI embedding model
-    let agent = agent::TradingAgent::<EmbeddingModel>::new(config, embedding_model).await?;
+    // Initialize trading agent
+    let agent = TradingAgent::new(config).await?;
 
     println!("Trading Agent initialized! Available commands:");
     println!("  analyze <symbol>           - Analyze market for a symbol");

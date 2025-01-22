@@ -2,23 +2,38 @@ use std::time::Duration;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use crate::types::{
-    api::{TokenSearchParams, WalletPortfolio},
+    api::{TokenSearchParams, WalletPortfolio, TokenOverview, LiquidityAnalysis, MarketImpact, PricePoint},
     error::BirdeyeError,
+    TimeInterval,
 };
 use super::{
     rate_limiter::RateLimiter,
     pagination::{PaginationParams, PaginatedResponse, PaginatedIterator},
     cache::CachedClient,
 };
+use crate::{
+    providers::{
+        cache::TokenCache,
+        pagination::{PaginatedRequest},
+    },
+    types::{
+        api::{TokenInfo},
+    },
+};
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use serde::de::DeserializeOwned;
 
 // Default cache TTL of 1 minute for frequently accessed data
 const DEFAULT_CACHE_TTL: Duration = Duration::from_secs(60);
+const DEFAULT_RATE_LIMIT: f64 = 10.0;
+const DEFAULT_CACHE_DURATION: Duration = Duration::from_secs(60);
 
 // Birdeye API allows 10 requests per second
 const RATE_LIMIT_CAPACITY: f64 = 10.0;
 const RATE_LIMIT_REFILL_RATE: f64 = 10.0; // tokens per second
 
-const API_BASE_URL: &str = "https://public-api.birdeye.so/v1";
+const API_BASE_URL: &str = "https://public-api.birdeye.so";
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_RETRIES: u32 = 3;
 const RETRY_DELAY: Duration = Duration::from_millis(1000);
@@ -28,6 +43,7 @@ pub struct BirdeyeProvider {
     client: Client,
     api_key: String,
     rate_limiter: RateLimiter,
+    token_cache: Arc<Mutex<TokenCache>>,
 }
 
 pub struct CachedBirdeyeProvider {
@@ -36,14 +52,14 @@ pub struct CachedBirdeyeProvider {
 
 impl CachedBirdeyeProvider {
     pub fn new(api_key: &str) -> Self {
-        let provider = BirdeyeProvider::new(api_key);
+        let provider = BirdeyeProvider::new(api_key.to_string());
         Self {
             inner: CachedClient::new(provider, DEFAULT_CACHE_TTL),
         }
     }
 
     pub fn with_cache_ttl(api_key: &str, cache_ttl: Duration) -> Self {
-        let provider = BirdeyeProvider::new(api_key);
+        let provider = BirdeyeProvider::new(api_key.to_string());
         Self {
             inner: CachedClient::new(provider, cache_ttl),
         }
@@ -59,7 +75,19 @@ impl CachedBirdeyeProvider {
 }
 
 impl BirdeyeProvider {
-    pub fn new(api_key: &str) -> Self {
+    pub fn new(api_key: String) -> Self {
+        Self::new_with_config(
+            api_key,
+            DEFAULT_RATE_LIMIT,
+            DEFAULT_CACHE_DURATION,
+        )
+    }
+
+    pub fn new_with_config(
+        api_key: String,
+        rate_limit: f64,
+        cache_duration: Duration,
+    ) -> Self {
         let client = Client::builder()
             .timeout(DEFAULT_TIMEOUT)
             .build()
@@ -67,8 +95,9 @@ impl BirdeyeProvider {
 
         Self {
             client,
-            api_key: api_key.to_string(),
-            rate_limiter: RateLimiter::new(RATE_LIMIT_CAPACITY, RATE_LIMIT_REFILL_RATE),
+            api_key,
+            rate_limiter: RateLimiter::new(rate_limit, rate_limit),
+            token_cache: Arc::new(Mutex::new(TokenCache::new(cache_duration))),
         }
     }
 
@@ -83,14 +112,11 @@ impl BirdeyeProvider {
             client,
             api_key: api_key.to_string(),
             rate_limiter: RateLimiter::new(capacity, refill_rate),
+            token_cache: Arc::new(Mutex::new(TokenCache::new(DEFAULT_CACHE_TTL))),
         }
     }
 
-    async fn request<T: for<'de> Deserialize<'de>>(
-        &self,
-        endpoint: &str,
-        params: &[(&str, String)],
-    ) -> Result<T, BirdeyeError> {
+    async fn request<T: DeserializeOwned>(&self, endpoint: &str, params: &[(&str, String)]) -> Result<T, BirdeyeError> {
         let url = format!("{}{}", API_BASE_URL, endpoint);
         
         let mut retries = 0;
@@ -104,92 +130,67 @@ impl BirdeyeProvider {
                 .query(params)
                 .send()
                 .await
-                .map_err(|e| match e {
-                    e if e.is_timeout() => BirdeyeError::NetworkError(e),
-                    e if e.is_connect() => BirdeyeError::NetworkError(e),
-                    e => BirdeyeError::UnexpectedError(e.to_string()),
-                })?;
+                .map_err(BirdeyeError::RequestError)?;
 
-            match response.status() {
-                status if status.is_success() => {
-                    return response.json::<T>().await
-                        .map_err(BirdeyeError::SerializationError);
+            if !response.status().is_success() {
+                if retries >= MAX_RETRIES {
+                    return Err(BirdeyeError::InvalidResponse(format!(
+                        "HTTP {} - {}",
+                        response.status(),
+                        response.text().await.unwrap_or_default()
+                    )));
                 }
-                status if status.as_u16() == 401 => {
-                    return Err(BirdeyeError::InvalidApiKey);
-                }
-                status if status.as_u16() == 429 => {
-                    if retries >= MAX_RETRIES {
-                        return Err(BirdeyeError::RateLimitExceeded);
-                    }
-                }
-                status => {
-                    let message = response.text().await
-                        .unwrap_or_else(|_| "Unknown error".to_string());
-                    
-                    if retries >= MAX_RETRIES {
-                        return Err(BirdeyeError::ApiError {
-                            status: status.as_u16(),
-                            message,
-                        });
-                    }
-                }
+                retries += 1;
+                tokio::time::sleep(RETRY_DELAY).await;
+                continue;
             }
 
-            retries += 1;
-            tokio::time::sleep(RETRY_DELAY).await;
+            return response
+                .json()
+                .await
+                .map_err(BirdeyeError::SerializationError);
         }
     }
 
-    pub async fn search_tokens(&self, params: TokenSearchParams) -> Result<PaginatedResponse<TokenInfo>, BirdeyeError> {
-        let mut query_params = Vec::new();
-        query_params.push(("keyword", params.keyword));
-        
-        if let Some(sort_by) = params.sort_by {
-            query_params.push(("sort_by", sort_by));
-        }
+    pub async fn search_tokens(&self, params: TokenSearchParams) -> Result<Vec<TokenInfo>, BirdeyeError> {
+        let mut query_params = vec![
+            ("query", params.query.clone()),
+        ];
 
-        if let Some(sort_type) = params.sort_type {
-            query_params.push(("sort_type", sort_type));
-        }
-
-        // Add pagination parameters
-        let pagination = PaginationParams::new(params.offset, params.limit);
-        if let Some(offset) = pagination.offset {
-            query_params.push(("offset", offset.to_string()));
-        }
-        if let Some(limit) = pagination.limit {
+        if let Some(limit) = params.limit {
             query_params.push(("limit", limit.to_string()));
         }
 
-        let response: PaginatedResponse<TokenInfo> = self.request("/token/search", &query_params).await?;
-        Ok(response)
+        if let Some(offset) = params.offset {
+            query_params.push(("offset", offset.to_string()));
+        }
+
+        self.request("/v1/token/search", &query_params).await
     }
 
-    /// Create a paginated iterator for token search results
-    pub fn search_tokens_iter(&self, params: TokenSearchParams) -> PaginatedIterator<TokenInfo, _, _> {
+    pub fn search_tokens_iter(
+        &self,
+        params: TokenSearchParams,
+    ) -> PaginatedIterator<TokenInfo, impl PaginatedRequest<TokenInfo>> {
         let client = self.clone();
-        PaginatedIterator::new(move |pagination| {
-            let mut search_params = params.clone();
-            search_params.offset = pagination.offset;
-            search_params.limit = pagination.limit;
-            client.search_tokens(search_params)
-        })
-    }
+        let request = move |offset: u32, limit: u32| {
+            let mut params = params.clone();
+            params.offset = Some(offset);
+            params.limit = Some(limit);
+            Box::pin(async move { client.search_tokens(params).await })
+        };
 
-    /// Search for tokens and collect all pages
-    pub async fn search_tokens_all(&self, params: TokenSearchParams) -> Result<Vec<TokenInfo>, BirdeyeError> {
-        self.search_tokens_iter(params).collect_all().await
+        PaginatedIterator::new(request, params.limit.unwrap_or(10))
     }
 
     pub async fn get_token_overview(&self, address: &str) -> Result<TokenOverview, BirdeyeError> {
         let query_params = vec![("address", address.to_string())];
-        self.request("/token/overview", &query_params).await
+        self.request("/v1/token/overview", &query_params).await
     }
 
     pub async fn analyze_liquidity(&self, address: &str) -> Result<LiquidityAnalysis, BirdeyeError> {
         let query_params = vec![("address", address.to_string())];
-        self.request("/token/liquidity", &query_params).await
+        self.request("/v1/token/liquidity", &query_params).await
     }
 
     pub async fn get_market_impact(&self, address: &str, size_usd: f64) -> Result<MarketImpact, BirdeyeError> {
@@ -197,7 +198,7 @@ impl BirdeyeProvider {
             ("address", address.to_string()),
             ("size", size_usd.to_string()),
         ];
-        self.request("/token/impact", &query_params).await
+        self.request("/v1/token/impact", &query_params).await
     }
 
     pub async fn get_price_history(&self, address: &str, interval: TimeInterval) -> Result<Vec<PricePoint>, BirdeyeError> {
@@ -205,16 +206,12 @@ impl BirdeyeProvider {
             ("address", address.to_string()),
             ("interval", interval.to_string()),
         ];
-        self.request("/token/price_history", &query_params).await
+        self.request("/v1/token/price_history", &query_params).await
     }
 
-    pub async fn search_wallet(&self, address: &str) -> Result<WalletPortfolio, BirdeyeError> {
-        if !address.starts_with("So") && !address.starts_with("DY") {
-            return Err(BirdeyeError::InvalidWalletAddress(address.to_string()));
-        }
-
-        let query_params = vec![("wallet", address.to_string())];
-        self.request("/wallet/tokens", &query_params).await
+    pub async fn get_wallet_portfolio(&self, wallet_address: &str) -> Result<WalletPortfolio, BirdeyeError> {
+        let query_params = vec![("wallet", wallet_address.to_string())];
+        self.request("/v1/wallet/tokens", &query_params).await
     }
 }
 
@@ -235,6 +232,7 @@ impl Clone for BirdeyeProvider {
             client: self.client.clone(),
             api_key: self.api_key.clone(),
             rate_limiter: RateLimiter::new(RATE_LIMIT_CAPACITY, RATE_LIMIT_REFILL_RATE),
+            token_cache: Arc::new(Mutex::new(TokenCache::new(DEFAULT_CACHE_TTL))),
         }
     }
 }
@@ -367,8 +365,8 @@ mod tests {
         };
 
         let response = provider.search_tokens(params).await?;
-        assert!(!response.data.is_empty());
-        assert!(response.pagination.limit == Some(10));
+        assert!(!response.is_empty());
+        assert!(response.len() == 10);
         Ok(())
     }
 

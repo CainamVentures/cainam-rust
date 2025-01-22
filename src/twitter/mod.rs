@@ -1,7 +1,5 @@
 use anyhow::Result;
 use reqwest::Client;
-// use serde::Deserialize;
-use std::time::Duration;
 
 pub struct TwitterClient {
     client: Client,
@@ -23,7 +21,7 @@ impl TwitterClient {
     }
 
     pub async fn login(&mut self) -> Result<()> {
-        // TODO: Implement Twitter login flow
+        // TODO: Implement Twitter login
         tracing::info!("Logging in to Twitter as {}", self.username);
         Ok(())
     }
