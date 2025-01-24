@@ -1,13 +1,21 @@
 use anyhow::Result;
 use rig::{
     agent::Agent,
-    providers::openai::{Client as OpenAIClient, CompletionModel, GPT_4_TURBO},
+    providers::openai::{Client as OpenAIClient, CompletionModel, GPT_4_TURBO, TEXT_EMBEDDING_ADA_002, EmbeddingModel},
+    vector_store::VectorStoreIndex,
+};
+use qdrant_client::{
+    qdrant::{CreateCollectionBuilder, Distance, QueryPointsBuilder, VectorParamsBuilder},
+    Qdrant,
 };
 use crate::{
     trading::TradingEngine,
     twitter::TwitterClient,
-    vector_store::VectorStore,
 };
+use rig_qdrant::QdrantVectorStore;
+
+const COLLECTION_NAME: &str = "trade_memories";
+const VECTOR_SIZE: u64 = 1536; // OpenAI embedding size
 
 #[derive(Debug, Clone)]
 pub struct AgentConfig {
@@ -22,7 +30,7 @@ pub struct TradingAgent {
     agent: Agent<CompletionModel>,
     trading_engine: TradingEngine,
     twitter_client: TwitterClient,
-    vector_store: VectorStore,
+    vector_store: QdrantVectorStore<EmbeddingModel>,
     config: AgentConfig,
 }
 
@@ -44,7 +52,24 @@ impl TradingAgent {
             config.twitter_username.clone(),
             config.twitter_password.clone()
         );
-        let vector_store = VectorStore::new().await?;
+        
+        // Initialize vector store
+        let qdrant = Qdrant::from_url("http://localhost:6334").build()?;
+        
+        // Create collection if it doesn't exist
+        if !qdrant.collection_exists(COLLECTION_NAME).await? {
+            qdrant
+                .create_collection(
+                    CreateCollectionBuilder::new(COLLECTION_NAME)
+                        .vectors_config(VectorParamsBuilder::new(VECTOR_SIZE, Distance::Cosine)),
+                )
+                .await?;
+        }
+
+        // Create vector store with OpenAI embeddings
+        let embedding_model = openai_client.embedding_model(TEXT_EMBEDDING_ADA_002);
+        let query_params = QueryPointsBuilder::new(COLLECTION_NAME).with_payload(true).build();
+        let vector_store = QdrantVectorStore::new(qdrant, embedding_model, query_params);
 
         Ok(Self {
             agent,
@@ -57,7 +82,17 @@ impl TradingAgent {
 
     pub async fn analyze_market(&self, symbol: &str) -> Result<()> {
         // TODO: Implement market analysis using Birdeye API
-        tracing::info!("Analyzing market for {}", symbol);
+        println!("Starting market analysis for {}", symbol);
+        
+        // Get market data from Birdeye
+        println!("Fetching market data from Birdeye...");
+        // TODO: Implement Birdeye API call
+        
+        // Store analysis in vector store
+        println!("Storing analysis in vector store...");
+        // TODO: Implement vector store storage
+        
+        println!("Analysis complete for {}", symbol);
         Ok(())
     }
 

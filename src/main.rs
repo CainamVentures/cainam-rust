@@ -7,7 +7,6 @@ use crate::agent::{AgentConfig, TradingAgent};
 mod agent;
 mod trading;
 mod twitter;
-mod vector_store;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -51,43 +50,26 @@ async fn main() -> Result<()> {
         }
 
         match parts[0] {
-            "analyze" if parts.len() == 2 => {
-                let symbol = parts[1];
-                println!("Analyzing market for {}", symbol);
-                if let Err(e) = agent.analyze_market(symbol).await {
-                    eprintln!("Error analyzing market: {}", e);
+            "analyze" => {
+                if parts.len() != 2 {
+                    println!("Usage: analyze <symbol>");
+                    continue;
                 }
+                agent.analyze_market(parts[1]).await?;
             }
-            "trade" if parts.len() == 4 => {
-                let symbol = parts[1];
-                let action = parts[2];
-                let amount: f64 = match parts[3].parse() {
-                    Ok(val) => val,
-                    Err(_) => {
-                        eprintln!("Invalid amount");
-                        continue;
-                    }
-                };
-
-                println!("Executing {} trade for {} {}", action, amount, symbol);
-                match agent.execute_trade(symbol, action, amount).await {
-                    Ok(true) => {
-                        println!("Trade executed successfully");
-                        if let Err(e) = agent.post_trade_update(symbol, action, amount).await {
-                            eprintln!("Error posting trade update: {}", e);
-                        }
-                    }
-                    Ok(false) => println!("Trade rejected"),
-                    Err(e) => eprintln!("Error executing trade: {}", e),
+            "trade" => {
+                if parts.len() != 4 {
+                    println!("Usage: trade <symbol> <buy|sell> <amount>");
+                    continue;
+                }
+                let amount = parts[3].parse::<f64>()?;
+                let success = agent.execute_trade(parts[1], parts[2], amount).await?;
+                if success {
+                    agent.post_trade_update(parts[1], parts[2], amount).await?;
                 }
             }
             "exit" => break,
-            _ => {
-                println!("Invalid command. Available commands:");
-                println!("  analyze <symbol>");
-                println!("  trade <symbol> <buy|sell> <amount>");
-                println!("  exit");
-            }
+            _ => println!("Unknown command. Type 'help' for available commands."),
         }
     }
 

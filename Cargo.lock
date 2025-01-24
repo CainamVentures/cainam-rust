@@ -1956,8 +1956,6 @@ dependencies = [
 [[package]]
 name = "rig-core"
 version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "db412a240081bfa42e95c84b5e2c75e29a6b9b06060623f2b735b40abe08f535"
 dependencies = [
  "futures",
  "glob",
@@ -1976,13 +1974,21 @@ dependencies = [
 [[package]]
 name = "rig-derive"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e08c252975eff73b87872cfbf0077215413e402bbd98976c78cd3abdbd9995c7"
 dependencies = [
  "indoc",
  "proc-macro2",
  "quote",
  "syn 2.0.96",
+]
+
+[[package]]
+name = "rig-qdrant"
+version = "0.1.5"
+dependencies = [
+ "qdrant-client",
+ "rig-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2301,6 +2307,7 @@ dependencies = [
  "qdrant-client",
  "reqwest 0.11.27",
  "rig-core",
+ "rig-qdrant",
  "serde",
  "serde_json",
  "test-log",
