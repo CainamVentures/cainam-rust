@@ -2,7 +2,6 @@ use anyhow::Result;
 use rig::{
     agent::Agent,
     providers::openai::{Client as OpenAIClient, CompletionModel, GPT_4_TURBO, TEXT_EMBEDDING_ADA_002, EmbeddingModel},
-    vector_store::VectorStoreIndex,
 };
 use qdrant_client::{
     qdrant::{CreateCollectionBuilder, Distance, QueryPointsBuilder, VectorParamsBuilder},
@@ -11,6 +10,7 @@ use qdrant_client::{
 use crate::{
     trading::TradingEngine,
     twitter::TwitterClient,
+    birdeye::BirdeyeClient,
 };
 use rig_qdrant::QdrantVectorStore;
 
@@ -31,6 +31,7 @@ pub struct TradingAgent {
     trading_engine: TradingEngine,
     twitter_client: TwitterClient,
     vector_store: QdrantVectorStore<EmbeddingModel>,
+    birdeye_client: BirdeyeClient,
     config: AgentConfig,
 }
 
@@ -71,26 +72,34 @@ impl TradingAgent {
         let query_params = QueryPointsBuilder::new(COLLECTION_NAME).with_payload(true).build();
         let vector_store = QdrantVectorStore::new(qdrant, embedding_model, query_params);
 
+        // Initialize Birdeye client
+        let birdeye_client = BirdeyeClient::new(config.birdeye_api_key.clone());
+
         Ok(Self {
             agent,
             trading_engine,
             twitter_client,
             vector_store,
+            birdeye_client,
             config,
         })
     }
 
     pub async fn analyze_market(&self, symbol: &str) -> Result<()> {
-        // TODO: Implement market analysis using Birdeye API
         println!("Starting market analysis for {}", symbol);
-        
-        // Get market data from Birdeye
         println!("Fetching market data from Birdeye...");
-        // TODO: Implement Birdeye API call
         
-        // Store analysis in vector store
-        println!("Storing analysis in vector store...");
-        // TODO: Implement vector store storage
+        let token_info = self.birdeye_client.get_token_info(symbol).await?;
+        
+        println!("\nMarket Analysis for {}:", symbol);
+        println!("Current Price: ${:.4}", token_info.price);
+        println!("24h Volume: ${:.2}", token_info.volume24h);
+        println!("24h Price Change: {:.2}%", token_info.price_change_24h);
+        println!("Liquidity: ${:.2}", token_info.liquidity);
+        println!("24h Trades: {}", token_info.trade24h);
+        
+        println!("\nStoring analysis in vector store...");
+        // TODO: Store analysis in vector store
         
         println!("Analysis complete for {}", symbol);
         Ok(())

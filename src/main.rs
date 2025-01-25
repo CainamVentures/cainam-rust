@@ -7,6 +7,7 @@ use crate::agent::{AgentConfig, TradingAgent};
 mod agent;
 mod trading;
 mod twitter;
+mod birdeye;
 
 #[tokio::main]
 async fn main() -> Result<()> {

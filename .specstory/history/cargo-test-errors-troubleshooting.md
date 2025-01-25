@@ -3960,6 +3960,1332 @@ ok now run the agent
 
 _**Assistant**_
 
+I'll help you run the agent. First, we need to make sure we have all the required environment variables set up. Let me create a `.env` file with the necessary variables:
+
+---
+
+_**Assistant**_
+
+```
+OPENAI_API_KEY=your_openai_api_key_here
+BIRDEYE_API_KEY=your_birdeye_api_key_here
+TWITTER_EMAIL=your_twitter_email_here
+TWITTER_USERNAME=your_twitter_username_here
+TWITTER_PASSWORD=your_twitter_password_here
+```
+
+---
+
+_**Assistant**_
+
+
+
+You'll need to replace the placeholders in the `.env` file with your actual API keys and credentials. Once you've done that, we can run the agent with:
+
+---
+
+_**Assistant**_
+
+```
+cargo run
+```
+
+---
+
+_**Assistant**_
+
+
+
+The agent is now running and waiting for commands. You can:
+
+1. Analyze a market: `analyze SOL`
+2. Execute a trade: `trade SOL buy 100`
+3. Exit the program: `exit`
+
+Before you can use it effectively, you'll need to:
+
+1. Set up your OpenAI API key for GPT-4 and embeddings
+2. Set up your Birdeye API key for Solana market data
+3. Set up your Twitter credentials if you want to post trade updates
+
+Would you like me to help you set up any of these configurations?
+
+---
+
+_**User**_
+
+The environment variables are setup. After I run the agent with 'Cargo run", and ask it to analyze SOL, it doesn't respond.
+
+---
+
+_**Assistant**_
+
+Let me check the analyze_market implementation:
+
+---
+
+_**Assistant**_
+
+```
+    pub async fn analyze_market(&self, symbol: &str) -> Result<()> {
+        // TODO: Implement market analysis using Birdeye API
+        println!("Starting market analysis for {}", symbol);
+        
+        // Get market data from Birdeye
+        println!("Fetching market data from Birdeye...");
+        // TODO: Implement Birdeye API call
+        
+        // Store analysis in vector store
+        println!("Storing analysis in vector store...");
+        // TODO: Implement vector store storage
+        
+        println!("Analysis complete for {}", symbol);
+        Ok(())
+    }
+```
+
+---
+
+_**Assistant**_
+
+
+
+Now let's run the agent again and test the analyze command:
+
+---
+
+_**Assistant**_
+
+```
+cargo run
+```
+
+---
+
+_**Assistant**_
+
+
+
+Now try typing `analyze SOL` at the prompt. You should see the analysis steps being printed. If you're still not seeing any output, let's implement the Birdeye API integration. I see you have a Birdeye API key in your environment variables.
+
+Let me create a new module for Birdeye integration:
+
+---
+
+_**Assistant**_
+
+```
+use anyhow::Result;
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+
+const BIRDEYE_API_BASE: &str = "https://public-api.birdeye.so";
+
+#[derive(Debug, Clone)]
+pub struct BirdeyeClient {
+    client: Client,
+    api_key: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TokenInfo {
+    pub price: f64,
+    pub volume_24h: f64,
+    pub price_change_24h: f64,
+}
+
+impl BirdeyeClient {
+    pub fn new(api_key: String) -> Self {
+        Self {
+            client: Client::new(),
+            api_key,
+        }
+    }
+
+    pub async fn get_token_info(&self, symbol: &str) -> Result<TokenInfo> {
+        let url = format!("{}/public/token", BIRDEYE_API_BASE);
+        
+        let response = self.client
+            .get(&url)
+            .header("X-API-KEY", &self.api_key)
+            .query(&[("address", symbol)])
+            .send()
+            .await?
+            .json::<TokenInfo>()
+            .await?;
+
+        Ok(response)
+    }
+}
+```
+
+---
+
+_**Assistant**_
+
+
+
+
+
+
+
+Now let's update the agent to use the Birdeye client:
+
+---
+
+_**Assistant**_
+
+```
+use anyhow::Result;
+use rig::{
+    agent::Agent,
+    providers::openai::{Client as OpenAIClient, CompletionModel, GPT_4_TURBO, TEXT_EMBEDDING_ADA_002, EmbeddingModel},
+    vector_store::VectorStoreIndex,
+};
+use qdrant_client::{
+    qdrant::{CreateCollectionBuilder, Distance, QueryPointsBuilder, VectorParamsBuilder},
+    Qdrant,
+};
+use crate::{
+    trading::TradingEngine,
+    twitter::TwitterClient,
+    birdeye::BirdeyeClient,
+};
+use rig_qdrant::QdrantVectorStore;
+
+const COLLECTION_NAME: &str = "trade_memories";
+const VECTOR_SIZE: u64 = 1536; // OpenAI embedding size
+
+#[derive(Debug, Clone)]
+pub struct AgentConfig {
+    pub openai_api_key: String,
+    pub birdeye_api_key: String,
+    pub twitter_email: String,
+    pub twitter_username: String,
+    pub twitter_password: String,
+}
+
+pub struct TradingAgent {
+    agent: Agent<CompletionModel>,
+    trading_engine: TradingEngine,
+    twitter_client: TwitterClient,
+    vector_store: QdrantVectorStore<EmbeddingModel>,
+    birdeye_client: BirdeyeClient,
+    config: AgentConfig,
+}
+
+impl TradingAgent {
+    pub async fn new(config: AgentConfig) -> Result<Self> {
+        // Initialize OpenAI client
+        let openai_client = OpenAIClient::new(&config.openai_api_key);
+        
+        // Create agent with GPT-4
+        let agent = openai_client
+            .agent(GPT_4_TURBO)
+            .preamble(include_str!("../prompts/system.txt"))
+            .build();
+
+        // Initialize components
+        let trading_engine = TradingEngine::new(0.7, 1000.0);
+        let twitter_client = TwitterClient::new(
+            config.twitter_email.clone(),
+            config.twitter_username.clone(),
+            config.twitter_password.clone()
+        );
+        
+        // Initialize vector store
+        let qdrant = Qdrant::from_url("http://localhost:6334").build()?;
+        
+        // Create collection if it doesn't exist
+        if !qdrant.collection_exists(COLLECTION_NAME).await? {
+            qdrant
+                .create_collection(
+                    CreateCollectionBuilder::new(COLLECTION_NAME)
+                        .vectors_config(VectorParamsBuilder::new(VECTOR_SIZE, Distance::Cosine)),
+                )
+                .await?;
+        }
+
+        // Create vector store with OpenAI embeddings
+        let embedding_model = openai_client.embedding_model(TEXT_EMBEDDING_ADA_002);
+        let query_params = QueryPointsBuilder::new(COLLECTION_NAME).with_payload(true).build();
+        let vector_store = QdrantVectorStore::new(qdrant, embedding_model, query_params);
+
+        // Initialize Birdeye client
+        let birdeye_client = BirdeyeClient::new(config.birdeye_api_key.clone());
+
+        Ok(Self {
+            agent,
+            trading_engine,
+            twitter_client,
+            vector_store,
+            birdeye_client,
+            config,
+        })
+    }
+
+    pub async fn analyze_market(&self, symbol: &str) -> Result<()> {
+        println!("Starting market analysis for {}", symbol);
+        
+        // Get market data from Birdeye
+        println!("Fetching market data from Birdeye...");
+        let token_info = self.birdeye_client.get_token_info(symbol).await?;
+        
+        println!("\nMarket Analysis for {}:", symbol);
+        println!("Current Price: ${:.4}", token_info.price);
+        println!("24h Volume: ${:.2}", token_info.volume_24h);
+        println!("24h Price Change: {:.2}%", token_info.price_change_24h);
+        
+        // TODO: Store analysis in vector store
+        println!("\nStoring analysis in vector store...");
+        
+        println!("Analysis complete for {}", symbol);
+        Ok(())
+    }
+
+    pub async fn execute_trade(&self, symbol: &str, action: &str, amount: f64) -> Result<bool> {
+        let decision = crate::trading::TradeDecision {
+            action: action.to_string(),
+            symbol: symbol.to_string(),
+            amount,
+            reason: "Market analysis indicates favorable conditions".to_string(),
+            confidence: 0.8,
+        };
+
+        self.trading_engine.execute_trade(&decision).await
+    }
+
+    pub async fn post_trade_update(&self, symbol: &str, action: &str, amount: f64) -> Result<()> {
+        let tweet = format!(
+            "🤖 Trade Alert!\n{} {} {}\nReason: Market analysis indicates favorable conditions",
+            action, amount, symbol
+        );
+
+        self.twitter_client.post_tweet(&tweet).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_trading_agent_creation() -> Result<()> {
+        let config = AgentConfig {
+            openai_api_key: "test_key".to_string(),
+            birdeye_api_key: "test_key".to_string(),
+            twitter_email: "test@example.com".to_string(),
+            twitter_username: "test_user".to_string(),
+            twitter_password: "test_pass".to_string(),
+        };
+
+        let agent = TradingAgent::new(config).await?;
+        assert!(agent.config.openai_api_key == "test_key");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_market_analysis() -> Result<()> {
+        let config = AgentConfig {
+            openai_api_key: "test_key".to_string(),
+            birdeye_api_key: "test_key".to_string(),
+            twitter_email: "test@example.com".to_string(),
+            twitter_username: "test_user".to_string(),
+            twitter_password: "test_pass".to_string(),
+        };
+
+        let agent = TradingAgent::new(config).await?;
+        agent.analyze_market("SOL").await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_trade_execution() -> Result<()> {
+        let config = AgentConfig {
+            openai_api_key: "test_key".to_string(),
+            birdeye_api_key: "test_key".to_string(),
+            twitter_email: "test@example.com".to_string(),
+            twitter_username: "test_user".to_string(),
+            twitter_password: "test_pass".to_string(),
+        };
+
+        let agent = TradingAgent::new(config).await?;
+        let result = agent.execute_trade("SOL", "BUY", 100.0).await?;
+        assert!(result);
+        Ok(())
+    }
+}
+```
+
+---
+
+_**Assistant**_
+
+
+
+
+
+
+
+We need to add the birdeye module to main.rs:
+
+---
+
+_**Assistant**_
+
+```
+use anyhow::Result;
+use dotenv;
+use std::io::{self, Write};
+use tokio;
+use crate::agent::{AgentConfig, TradingAgent};
+
+mod agent;
+mod trading;
+mod twitter;
+mod birdeye;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    // Initialize logging
+    tracing_subscriber::fmt::init();
+
+    // Load environment variables
+    dotenv::dotenv().ok();
+
+    let config = AgentConfig {
+        openai_api_key: std::env::var("OPENAI_API_KEY")
+            .expect("OPENAI_API_KEY must be set"),
+        birdeye_api_key: std::env::var("BIRDEYE_API_KEY")
+            .expect("BIRDEYE_API_KEY must be set"),
+        twitter_email: std::env::var("TWITTER_EMAIL")
+            .expect("TWITTER_EMAIL must be set"),
+        twitter_username: std::env::var("TWITTER_USERNAME")
+            .expect("TWITTER_USERNAME must be set"),
+        twitter_password: std::env::var("TWITTER_PASSWORD")
+            .expect("TWITTER_PASSWORD must be set"),
+    };
+
+    // Initialize trading agent
+    let agent = TradingAgent::new(config).await?;
+
+    println!("Trading Agent initialized! Available commands:");
+    println!("  analyze <symbol>           - Analyze market for a symbol");
+    println!("  trade <symbol> <buy|sell> <amount>  - Execute a trade");
+    println!("  exit                       - Exit the program");
+
+    let mut input = String::new();
+    loop {
+        print!("> ");
+        io::stdout().flush()?;
+        input.clear();
+        io::stdin().read_line(&mut input)?;
+
+        let parts: Vec<&str> = input.trim().split_whitespace().collect();
+        if parts.is_empty() {
+            continue;
+        }
+
+        match parts[0] {
+            "analyze" => {
+                if parts.len() != 2 {
+                    println!("Usage: analyze <symbol>");
+                    continue;
+                }
+                agent.analyze_market(parts[1]).await?;
+            }
+            "trade" => {
+                if parts.len() != 4 {
+                    println!("Usage: trade <symbol> <buy|sell> <amount>");
+                    continue;
+                }
+                let amount = parts[3].parse::<f64>()?;
+                let success = agent.execute_trade(parts[1], parts[2], amount).await?;
+                if success {
+                    agent.post_trade_update(parts[1], parts[2], amount).await?;
+                }
+            }
+            "exit" => break,
+            _ => println!("Unknown command. Type 'help' for available commands."),
+        }
+    }
+
+    Ok(())
+}
+```
+
+---
+
+_**Assistant**_
+
+
+
+
+
+
+
+
+
+
+
+Now let's run the agent again and test the analyze command:
+
+---
+
+_**Assistant**_
+
+```
+cargo run
+```
+
+---
+
+_**Assistant**_
+
+
+
+
+
+
+
+Now when you type `analyze SOL` at the prompt, it should:
+1. Connect to Birdeye API
+2. Fetch market data for SOL
+3. Display the current price, 24h volume, and price change
+
+Try it and let me know if you see any errors. We'll need to provide the correct token address for SOL since Birdeye uses addresses rather than symbols.
+
+Let me update the Birdeye client to handle token addresses:
+
+---
+
+_**Assistant**_
+
+```
+use anyhow::{Result, anyhow};
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+const BIRDEYE_API_BASE: &str = "https://public-api.birdeye.so";
+
+// Common token addresses
+const TOKEN_ADDRESSES: &[(&str, &str)] = &[
+    ("SOL", "So11111111111111111111111111111111111111112"),
+    ("USDC", "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"),
+    ("BONK", "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"),
+];
+
+#[derive(Debug, Clone)]
+pub struct BirdeyeClient {
+    client: Client,
+    api_key: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TokenInfo {
+    pub price: f64,
+    #[serde(rename = "volume24h")]
+    pub volume_24h: f64,
+    #[serde(rename = "priceChange24h")]
+    pub price_change_24h: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct BirdeyeResponse<T> {
+    success: bool,
+    data: T,
+}
+
+impl BirdeyeClient {
+    pub fn new(api_key: String) -> Self {
+        Self {
+            client: Client::new(),
+            api_key,
+        }
+    }
+
+    fn get_token_address(symbol: &str) -> Result<&'static str> {
+        TOKEN_ADDRESSES
+            .iter()
+            .find(|(s, _)| *s == symbol)
+            .map(|(_, addr)| *addr)
+            .ok_or_else(|| anyhow!("Unknown token symbol: {}", symbol))
+    }
+
+    pub async fn get_token_info(&self, symbol: &str) -> Result<TokenInfo> {
+        let token_address = Self::get_token_address(symbol)?;
+        let url = format!("{}/public/token/{}", BIRDEYE_API_BASE, token_address);
+        
+        let response = self.client
+            .get(&url)
+            .header("X-API-KEY", &self.api_key)
+            .send()
+            .await?
+            .json::<BirdeyeResponse<TokenInfo>>()
+            .await?;
+
+        if !response.success {
+            return Err(anyhow!("Birdeye API request failed"));
+        }
+
+        Ok(response.data)
+    }
+}
+```
+
+---
+
+_**Assistant**_
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Now let's run the agent again and test the analyze command:
+
+---
+
+_**Assistant**_
+
+```
+cargo run
+```
+
+---
+
+_**Assistant**_
+
+
+
+
+
+
+
+
+
+
+
+Ah, we need to make the symbol case-insensitive. Let me fix that:
+
+---
+
+_**Assistant**_
+
+```
+use anyhow::{Result, anyhow};
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+
+const BIRDEYE_API_BASE: &str = "https://public-api.birdeye.so";
+
+// Common token addresses
+const TOKEN_ADDRESSES: &[(&str, &str)] = &[
+    ("SOL", "So11111111111111111111111111111111111111112"),
+    ("USDC", "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"),
+    ("BONK", "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"),
+];
+
+#[derive(Debug, Clone)]
+pub struct BirdeyeClient {
+    client: Client,
+    api_key: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TokenInfo {
+    pub price: f64,
+    #[serde(rename = "volume24h")]
+    pub volume_24h: f64,
+    #[serde(rename = "priceChange24h")]
+    pub price_change_24h: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct BirdeyeResponse<T> {
+    success: bool,
+    data: T,
+}
+
+impl BirdeyeClient {
+    pub fn new(api_key: String) -> Self {
+        Self {
+            client: Client::new(),
+            api_key,
+        }
+    }
+
+    fn get_token_address(symbol: &str) -> Result<&'static str> {
+        let symbol = symbol.to_uppercase();
+        TOKEN_ADDRESSES
+            .iter()
+            .find(|(s, _)| *s == symbol)
+            .map(|(_, addr)| *addr)
+            .ok_or_else(|| anyhow!("Unknown token symbol: {}", symbol))
+    }
+
+    pub async fn get_token_info(&self, symbol: &str) -> Result<TokenInfo> {
+        let token_address = Self::get_token_address(symbol)?;
+        let url = format!("{}/public/token/{}", BIRDEYE_API_BASE, token_address);
+        
+        let response = self.client
+            .get(&url)
+            .header("X-API-KEY", &self.api_key)
+            .send()
+            .await?
+            .json::<BirdeyeResponse<TokenInfo>>()
+            .await?;
+
+        if !response.success {
+            return Err(anyhow!("Birdeye API request failed"));
+        }
+
+        Ok(response.data)
+    }
+}
+```
+
+---
+
+_**Assistant**_
+
+
+
+Now let me run the agent again to test:
+
+---
+
+_**Assistant**_
+
+```
+cargo run
+```
+
+---
+
+_**Assistant**_
+
+
+
+I see the issue - we need to handle the Birdeye API response format correctly. Let me update the response structure:
+
+---
+
+_**Assistant**_
+
+```
+use anyhow::{Result, anyhow};
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+
+const BIRDEYE_API_BASE: &str = "https://public-api.birdeye.so";
+
+// Common token addresses
+const TOKEN_ADDRESSES: &[(&str, &str)] = &[
+    ("SOL", "So11111111111111111111111111111111111111112"),
+    ("USDC", "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"),
+    ("BONK", "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"),
+];
+
+#[derive(Debug, Clone)]
+pub struct BirdeyeClient {
+    client: Client,
+    api_key: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TokenInfo {
+    pub price: f64,
+    #[serde(rename = "volume24h")]
+    pub volume_24h: f64,
+    #[serde(rename = "priceChange24h")]
+    pub price_change_24h: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct BirdeyeResponse {
+    success: bool,
+    message: String,
+    result: TokenInfo,
+}
+
+impl BirdeyeClient {
+    pub fn new(api_key: String) -> Self {
+        Self {
+            client: Client::new(),
+            api_key,
+        }
+    }
+
+    fn get_token_address(symbol: &str) -> Result<&'static str> {
+        let symbol = symbol.to_uppercase();
+        TOKEN_ADDRESSES
+            .iter()
+            .find(|(s, _)| *s == symbol)
+            .map(|(_, addr)| *addr)
+            .ok_or_else(|| anyhow!("Unknown token symbol: {}", symbol))
+    }
+
+    pub async fn get_token_info(&self, symbol: &str) -> Result<TokenInfo> {
+        let token_address = Self::get_token_address(symbol)?;
+        let url = format!("{}/public/token/{}", BIRDEYE_API_BASE, token_address);
+        
+        let response = self.client
+            .get(&url)
+            .header("X-API-KEY", &self.api_key)
+            .send()
+            .await?
+            .json::<BirdeyeResponse>()
+            .await?;
+
+        if !response.success {
+            return Err(anyhow!("Birdeye API request failed: {}", response.message));
+        }
+
+        Ok(response.result)
+    }
+}
+```
+
+---
+
+_**Assistant**_
+
+
+
+Let me also update the agent to display the market data nicely:
+
+---
+
+_**Assistant**_
+
+```
+    pub async fn analyze_market(&self, symbol: &str) -> Result<()> {
+        println!("Starting market analysis for {}", symbol);
+        println!("Fetching market data from Birdeye...");
+        
+        let token_info = self.birdeye_client.get_token_info(symbol).await?;
+        
+        println!("\nMarket Analysis for {}:", symbol);
+        println!("Current Price: ${:.4}", token_info.price);
+        println!("24h Volume: ${:.2}", token_info.volume_24h);
+        println!("24h Price Change: {:.2}%", token_info.price_change_24h);
+        
+        println!("\nStoring analysis in vector store...");
+        // TODO: Store analysis in vector store
+        
+        println!("Analysis complete for {}", symbol);
+        Ok(())
+    }
+```
+
+---
+
+_**Assistant**_
+
+
+
+
+
+
+
+Now let's run the agent again to test:
+
+---
+
+_**Assistant**_
+
+```
+cargo run
+```
+
+---
+
+_**Assistant**_
+
+
+
+
+
+
+
+I see the issue - let me check the actual Birdeye API response format:
+
+---
+
+_**Assistant**_
+
+```
+curl -s -H "X-API-KEY: ${BIRDEYE_API_KEY}" "https://public-api.birdeye.so/public/token/So11111111111111111111111111111111111111112" | jq
+```
+
+---
+
+_**Assistant**_
+
+
+
+Ah, I see the issue - we need to use a different endpoint for the Birdeye API. Let me update the client:
+
+---
+
+_**Assistant**_
+
+```
+use anyhow::{Result, anyhow};
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+
+const BIRDEYE_API_BASE: &str = "https://public-api.birdeye.so";
+
+// Common token addresses
+const TOKEN_ADDRESSES: &[(&str, &str)] = &[
+    ("SOL", "So11111111111111111111111111111111111111112"),
+    ("USDC", "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"),
+    ("BONK", "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"),
+];
+
+#[derive(Debug, Clone)]
+pub struct BirdeyeClient {
+    client: Client,
+    api_key: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TokenInfo {
+    pub price: f64,
+    #[serde(rename = "volume24h")]
+    pub volume_24h: f64,
+    #[serde(rename = "priceChange24h")]
+    pub price_change_24h: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct BirdeyeResponse {
+    success: bool,
+    message: String,
+    data: TokenInfo,
+}
+
+impl BirdeyeClient {
+    pub fn new(api_key: String) -> Self {
+        Self {
+            client: Client::new(),
+            api_key,
+        }
+    }
+
+    fn get_token_address(symbol: &str) -> Result<&'static str> {
+        let symbol = symbol.to_uppercase();
+        TOKEN_ADDRESSES
+            .iter()
+            .find(|(s, _)| *s == symbol)
+            .map(|(_, addr)| *addr)
+            .ok_or_else(|| anyhow!("Unknown token symbol: {}", symbol))
+    }
+
+    pub async fn get_token_info(&self, symbol: &str) -> Result<TokenInfo> {
+        let token_address = Self::get_token_address(symbol)?;
+        let url = format!("{}/public/price?address={}", BIRDEYE_API_BASE, token_address);
+        
+        let response = self.client
+            .get(&url)
+            .header("X-API-KEY", &self.api_key)
+            .send()
+            .await?
+            .json::<BirdeyeResponse>()
+            .await?;
+
+        if !response.success {
+            return Err(anyhow!("Birdeye API request failed: {}", response.message));
+        }
+
+        Ok(response.data)
+    }
+}
+```
+
+---
+
+_**Assistant**_
+
+
+
+
+
+
+
+Now let's run the agent again to test:
+
+---
+
+_**User**_
+
+@BirdEye Just use the birdeye documentation
+
+---
+
+_**Assistant**_
+
+I'll help update the Birdeye client based on the official documentation. Looking at the documentation, we need to update the endpoint and response structure:
+
+---
+
+_**Assistant**_
+
+```
+use anyhow::{Result, anyhow};
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+
+const BIRDEYE_API_BASE: &str = "https://public-api.birdeye.so";
+
+// Common token addresses
+const TOKEN_ADDRESSES: &[(&str, &str)] = &[
+    ("SOL", "So11111111111111111111111111111111111111112"),
+    ("USDC", "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"),
+    ("BONK", "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"),
+];
+
+#[derive(Debug, Clone)]
+pub struct BirdeyeClient {
+    client: Client,
+    api_key: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TokenInfo {
+    pub price: f64,
+    pub volume24h: f64,
+    #[serde(rename = "priceChange24h")]
+    pub price_change_24h: f64,
+    pub liquidity: f64,
+    pub trade24h: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct TokenMarketResponse {
+    success: bool,
+    data: TokenMarketData,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct TokenMarketData {
+    items: Vec<TokenMarketItem>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct TokenMarketItem {
+    price: Option<f64>,
+    volume24h: Option<f64>,
+    #[serde(rename = "priceChange24h")]
+    price_change_24h: Option<f64>,
+    liquidity: Option<f64>,
+    trade24h: Option<i64>,
+}
+
+impl BirdeyeClient {
+    pub fn new(api_key: String) -> Self {
+        Self {
+            client: Client::new(),
+            api_key,
+        }
+    }
+
+    fn get_token_address(symbol: &str) -> Result<&'static str> {
+        let symbol = symbol.to_uppercase();
+        TOKEN_ADDRESSES
+            .iter()
+            .find(|(s, _)| *s == symbol)
+            .map(|(_, addr)| *addr)
+            .ok_or_else(|| anyhow!("Unknown token symbol: {}", symbol))
+    }
+
+    pub async fn get_token_info(&self, symbol: &str) -> Result<TokenInfo> {
+        let token_address = Self::get_token_address(symbol)?;
+        let url = format!("{}/public/token_list?address={}", BIRDEYE_API_BASE, token_address);
+        
+        let response = self.client
+            .get(&url)
+            .header("X-API-KEY", &self.api_key)
+            .send()
+            .await?
+            .json::<TokenMarketResponse>()
+            .await?;
+
+        if !response.success {
+            return Err(anyhow!("Birdeye API request failed"));
+        }
+
+        let market = response.data.items.first()
+            .ok_or_else(|| anyhow!("No market data found for token"))?;
+
+        Ok(TokenInfo {
+            price: market.price.unwrap_or_default(),
+            volume24h: market.volume24h.unwrap_or_default(),
+            price_change_24h: market.price_change_24h.unwrap_or_default(),
+            liquidity: market.liquidity.unwrap_or_default(),
+            trade24h: market.trade24h.unwrap_or_default(),
+        })
+    }
+}
+```
+
+---
+
+_**Assistant**_
+
+
+
+Now let me update the agent to display the additional market data:
+
+---
+
+_**Assistant**_
+
+```
+    pub async fn analyze_market(&self, symbol: &str) -> Result<()> {
+        println!("Starting market analysis for {}", symbol);
+        println!("Fetching market data from Birdeye...");
+        
+        let token_info = self.birdeye_client.get_token_info(symbol).await?;
+        
+        println!("\nMarket Analysis for {}:", symbol);
+        println!("Current Price: ${:.4}", token_info.price);
+        println!("24h Volume: ${:.2}", token_info.volume24h);
+        println!("24h Price Change: {:.2}%", token_info.price_change_24h);
+        println!("Liquidity: ${:.2}", token_info.liquidity);
+        println!("24h Trades: {}", token_info.trade24h);
+        
+        println!("\nStoring analysis in vector store...");
+        // TODO: Store analysis in vector store
+        
+        println!("Analysis complete for {}", symbol);
+        Ok(())
+    }
+```
+
+---
+
+_**Assistant**_
+
+
+
+
+
+
+
+Now let's run the agent to test:
+
+---
+
+_**Assistant**_
+
+```
+cargo run
+```
+
+---
+
+_**Assistant**_
+
+
+
+
+
+
+
+Let me check the actual API response format again:
+
+---
+
+_**Assistant**_
+
+```
+curl -s -H "X-API-KEY: ${BIRDEYE_API_KEY}" "https://public-api.birdeye.so/public/token_list?address=So11111111111111111111111111111111111111112" | jq
+```
+
+---
+
+_**Assistant**_
+
+
+
+
+
+
+
+Let me try a different endpoint from the Birdeye API:
+
+---
+
+_**Assistant**_
+
+```
+curl -s -H "X-API-KEY: ${BIRDEYE_API_KEY}" "https://public-api.birdeye.so/public/token/So11111111111111111111111111111111111111112/price" | jq
+```
+
+---
+
+_**Assistant**_
+
+
+
+
+
+
+
+
+
+
+
+Let me try one more endpoint from the Birdeye API:
+
+---
+
+_**Assistant**_
+
+```
+curl -s -H "X-API-KEY: ${BIRDEYE_API_KEY}" "https://public-api.birdeye.so/public/price?address=So11111111111111111111111111111111111111112" | jq
+```
+
+---
+
+_**Assistant**_
+
+
+
+I see the issue - it seems the Birdeye API key might not be valid or we might need to check the API documentation for the correct endpoints and authentication method. Could you please verify your Birdeye API key and share the relevant part of the API documentation? This will help me update the client correctly.
+
+In the meantime, I'll update the error handling to be more informative:
+
+---
+
+_**Assistant**_
+
+```
+    pub async fn get_token_info(&self, symbol: &str) -> Result<TokenInfo> {
+        let token_address = Self::get_token_address(symbol)?;
+        let url = format!("{}/public/price?address={}", BIRDEYE_API_BASE, token_address);
+        
+        println!("Requesting: {}", url);
+        
+        let response = self.client
+            .get(&url)
+            .header("X-API-KEY", &self.api_key)
+            .send()
+            .await?;
+            
+        let status = response.status();
+        let text = response.text().await?;
+        
+        println!("Response status: {}", status);
+        println!("Response body: {}", text);
+        
+        if !status.is_success() {
+            return Err(anyhow!("Birdeye API request failed with status {}: {}", status, text));
+        }
+        
+        let response: TokenMarketResponse = serde_json::from_str(&text)
+            .map_err(|e| anyhow!("Failed to parse response: {}\nResponse: {}", e, text))?;
+
+        if !response.success {
+            return Err(anyhow!("Birdeye API request failed"));
+        }
+
+        let market = response.data.items.first()
+            .ok_or_else(|| anyhow!("No market data found for token"))?;
+
+        Ok(TokenInfo {
+            price: market.price.unwrap_or_default(),
+            volume24h: market.volume24h.unwrap_or_default(),
+            price_change_24h: market.price_change_24h.unwrap_or_default(),
+            liquidity: market.liquidity.unwrap_or_default(),
+            trade24h: market.trade24h.unwrap_or_default(),
+        })
+    }
+```
+
+---
+
+_**Assistant**_
+
+
+
+
+
+
+
+
+
+
+
+Now let's run the agent again to see the detailed error information:
+
+---
+
+_**Assistant**_
+
+```
+cargo run
+```
+
+---
+
+_**Assistant**_
+
+
+
+---
+
+_**User**_
+
+Lets restart qdrant in docker first
+
+---
+
+_**Assistant**_
+
+I'll help you start Qdrant in Docker. Let me run the Docker command to start a Qdrant container:
+
+---
+
+_**Assistant**_
+
+```
+docker run -d --name qdrant -p 6333:6333 -p 6334:6334 qdrant/qdrant
+```
+
+---
+
+_**Assistant**_
+
+
+
+Great! Qdrant is now running in Docker. Let's verify that it's running and accessible:
+
+---
+
+_**Assistant**_
+
+```
+curl http://localhost:6334/collections
+```
+
+---
+
+_**Assistant**_
+
 
 
 ---
