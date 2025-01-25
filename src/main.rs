@@ -12,7 +12,9 @@ mod birdeye;
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize logging
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .init();
 
     // Load environment variables
     dotenv::dotenv().ok();
@@ -75,4 +77,4 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
-} 
+}

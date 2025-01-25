@@ -48,11 +48,14 @@ impl TradingAgent {
 
         // Initialize components
         let trading_engine = TradingEngine::new(0.7, 1000.0);
-        let twitter_client = TwitterClient::new(
+        
+        // Initialize Twitter client and login
+        let mut twitter_client = TwitterClient::new(
             config.twitter_email.clone(),
             config.twitter_username.clone(),
-            config.twitter_password.clone()
+            config.twitter_password.clone(),
         );
+        twitter_client.login().await?;
         
         // Initialize vector store
         let qdrant = Qdrant::from_url("http://localhost:6334").build()?;
@@ -125,6 +128,22 @@ impl TradingAgent {
 
         self.twitter_client.post_tweet(&tweet).await
     }
+
+    pub async fn run(&self) -> Result<()> {
+        loop {
+            // Perform market analysis
+            self.analyze_market("SOL").await?;
+
+            // Execute a trade
+            self.execute_trade("SOL", "BUY", 100.0).await?;
+
+            // Post trade update
+            self.post_trade_update("SOL", "BUY", 100.0).await?;
+
+            // Sleep for a specified interval before the next iteration
+            tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -176,4 +195,4 @@ mod tests {
         assert!(result);
         Ok(())
     }
-} 
+}
